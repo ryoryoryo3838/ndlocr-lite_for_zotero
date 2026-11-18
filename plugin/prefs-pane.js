@@ -49,6 +49,7 @@ var NDLOCRIndexPrefs = {
 			return;
 		}
 		if (!picked) return;
+		plugin.askBackup(window);
 		const button = document.getElementById('ndlocr-index-setup');
 		button.disabled = true;
 		this._status('インストール中…（数分〜十数分かかります。ツール → 「NDLOCR: 実行中の OCR を中止」で中止できます）');

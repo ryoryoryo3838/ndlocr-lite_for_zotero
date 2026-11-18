@@ -33,10 +33,12 @@
 		<html:h2>透明テキスト付き PDF</html:h2>
 		<description>OCR した文字を見えない層として重ねた PDF を作ると、PDF ビューアでの検索・ハイライト、文字の選択やコピーができるようになります。</description>
 		<radiogroup preference="extensions.zotero.ndlocrindex.pdfOutput">
+			<radio value="replace" label="元の PDF と差し替える（透明テキストを追記する。右クリック →「NDLOCR: 差し替えた PDF を元に戻す」でいつでも戻せる）"/>
 			<radio value="attach" label="別の添付として追加する（元の PDF はそのまま）"/>
-			<radio value="replace" label="元の PDF と差し替える（元の PDF は Zotero データフォルダの ndlocr-lite-backup に退避し、「解除」で戻す）"/>
 			<radio value="none" label="作らない（Zotero の全文インデックスへの登録だけ）"/>
 		</radiogroup>
+		<checkbox preference="extensions.zotero.ndlocrindex.backupOriginal"
+			label="差し替える前の PDF を Zotero データフォルダの ndlocr-lite-backup にバックアップする"/>
 	</groupbox>
 
 	<groupbox>

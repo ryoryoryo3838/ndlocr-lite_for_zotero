@@ -24,7 +24,9 @@ const IOUtils = {
   makeDirectory: async (p, o) => fs.mkdirSync(p, { recursive: true }),
   copy: async (a, b) => fs.copyFileSync(a, b),
   move: async (a, b) => fs.renameSync(a, b),
-  stat: async p => ({ type: fs.statSync(p).isDirectory() ? 'directory' : 'regular' }),
+  read: async (p, o) => { const b = fs.readFileSync(p); return o?.maxBytes ? b.subarray(0, o.maxBytes) : b; },
+  write: async (p, b) => fs.writeFileSync(p, b),
+  stat: async p => ({ type: fs.statSync(p).isDirectory() ? 'directory' : 'regular', size: fs.statSync(p).size }),
   remove: async (p, o) => fs.rmSync(p, { recursive: true, force: true }),
 };
 const PathUtils = { filename: p => path.basename(p), join: (...a) => { if (!path.isAbsolute(a[0])) throw new Error('not absolute'); return path.join(...a); }, parent: p => (p === '/' ? null : path.dirname(p)) };
@@ -52,7 +54,7 @@ items[10] = { id: 10, isAttachment: () => false, isRegularItem: () => true, getA
 const cacheFile = it => ({ path: path.join(DATA, 'storage', it.key, '.zotero-ft-cache') });
 const Zotero = {
   debug: m => log.push(m), logError: e => console.log('logError:', e.message || e),
-  Prefs: { _p: { 'extensions.zotero.ndlocrindex.installDir': NDLOCR_DIR, 'extensions.zotero.ndlocrindex.dpi': '150', 'extensions.zotero.ndlocrindex.minChars': '100', 'extensions.zotero.ndlocrindex.syncFulltext': true, 'extensions.zotero.ndlocrindex.restoreOnReindex': true, 'extensions.zotero.ndlocrindex.pdfOutput': 'attach' }, get(k) { return this._p[k]; }, set(k, v) { this._p[k] = v; } },
+  Prefs: { _p: { 'extensions.zotero.ndlocrindex.installDir': NDLOCR_DIR, 'extensions.zotero.ndlocrindex.dpi': '150', 'extensions.zotero.ndlocrindex.minChars': '100', 'extensions.zotero.ndlocrindex.syncFulltext': true, 'extensions.zotero.ndlocrindex.restoreOnReindex': true, 'extensions.zotero.ndlocrindex.pdfOutput': 'attach', 'extensions.zotero.ndlocrindex.backupOriginal': true }, get(k) { return this._p[k]; }, set(k, v) { this._p[k] = v; } },
   isWin: process.platform === 'win32', Utilities: { randomString: n => Math.random().toString(36).slice(2, 2 + n), Internal: { openPreferences() {}, md5Async: async p => md5(p) } },
   DataDirectory: { dir: DATA },
   Attachments: { LINK_MODE_LINKED_URL: 3, getStorageDirectory: it => ({ path: path.join(DATA, 'storage', it.key) }),
@@ -73,7 +75,8 @@ const Zotero = {
 };
 function notify(ev, ids) { Zotero.Notifier._obs && Zotero.Notifier._obs.notify(ev, 'item', ids); }
 const alerts = [];
-const Services = { dirsvc: { get: () => ({ path: os.homedir() }) }, prompt: { alert: (w, t, m) => alerts.push(m), confirm: () => true } };
+const Services = { dirsvc: { get: () => ({ path: os.homedir() }) }, prompt: { alert: (w, t, m) => alerts.push(m), confirm: () => true, BUTTON_POS_0: 1, BUTTON_POS_2: 65536, BUTTON_TITLE_IS_STRING: 127, confirmEx: () => confirmExAnswer } };
+let confirmExAnswer = 0;
 let pwText = [];
 Zotero.ProgressWindow = function () { this.changeHeadline = () => {}; this.show = () => {}; this.startCloseTimer = () => {};
   this.ItemProgress = function () { this.setText = t => pwText.push(t); this.setProgress = () => {}; }; };
@@ -174,6 +177,29 @@ const K = 'extensions.zotero.ndlocrindex.installDir';
   await P.removeSelected(win11);
   check('差し替え: 変更されたファイルは戻さない', /解除できなかったもの/.test(alerts.pop()) && fs.existsSync(backup) && fs.existsSync(sidecar));
   fs.copyFileSync(backup, origPath); fs.rmSync(backup); fs.rmSync(sidecar);
+
+  // セットアップ時のバックアップの選択
+  confirmExAnswer = 2; P.askBackup(null);
+  check('バックアップしないを選べる', Zotero.Prefs._p['extensions.zotero.ndlocrindex.backupOriginal'] === false);
+  confirmExAnswer = 0; P.askBackup(null);
+  check('バックアップするを選べる', Zotero.Prefs._p['extensions.zotero.ndlocrindex.backupOriginal'] === true);
+
+  // バックアップなしで差し替え: 追記分を取り除いて戻す
+  Zotero.Prefs._p['extensions.zotero.ndlocrindex.backupOriginal'] = false;
+  await P.runSelected(win11, true); alerts.pop(); // 直前のテストの索引が残っているので強制
+  const side1 = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
+  check('バックアップなし: 退避しない', !fs.existsSync(backup) && side1.backup === null && side1.originalSize === fs.statSync(path.join(ROOT, 'tests/fixtures/vertical-ja-2pages.pdf')).size);
+  await P.runSelected(win11, true); alerts.pop();
+  const layer = cp.execFileSync('pdftotext', [origPath, '-']).toString();
+  check('バックアップなし: 再 OCR でも透明テキストを二重にしない', layer.split('図書館情報学').length === 2, JSON.stringify(layer.slice(0, 80)));
+  await P.restoreItems(win11, [items[11]]);
+  check('元に戻す（1 クリック）: 追記分を取り除いて元の PDF に戻る', /1 件を元の PDF に戻しました/.test(alerts.pop()) && md5(origPath) === origMD5);
+  const side2 = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
+  check('元に戻す: OCR テキストの索引は残す', !side2.replaced && fulltext[11]?.text.includes('図書館情報学'));
+  await P.restoreItems(win11, [items[11]]);
+  check('元に戻す: 差し替えていなければ何もしない', /差し替えた PDF はありません/.test(alerts.pop()));
+  await P.removeSelected(win11); alerts.pop();
+  Zotero.Prefs._p['extensions.zotero.ndlocrindex.backupOriginal'] = true;
   Zotero.Prefs._p['extensions.zotero.ndlocrindex.pdfOutput'] = 'attach';
 
   // 中止
