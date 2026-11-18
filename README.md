@@ -9,8 +9,11 @@
 
 ## 1. プラグインを Zotero に入れる
 
-1. Zotero で「ツール → プラグイン」を開く
-2. 右上の歯車 →「ファイルからプラグインをインストール…」で `ndlocr-lite_for_zotero-0.1.1.xpi` を選ぶ
+1. [最新のリリース](https://github.com/ryoryoryo3838/ndlocr-lite_for_zotero/releases/latest) から `ndlocr-lite_for_zotero-<版>.xpi` をダウンロードする（Firefox で開くとブラウザに追加しようとするので、リンクを右クリック →「名前を付けてリンク先を保存」）
+2. Zotero で「ツール → プラグイン」を開く
+3. 右上の歯車 →「ファイルからプラグインをインストール…」で、ダウンロードした `.xpi` を選ぶ
+
+新しい版が出ると、Zotero が自動で更新します（「ツール → プラグイン」の歯車 →「アップデートを確認」で手動でも確認できます）。
 
 ## 2. NDLOCR-Lite をセットアップする
 
@@ -27,7 +30,7 @@
 
 ### インストーラを直接実行する場合
 
-Zotero からのセットアップがうまくいかないときは、`installer` フォルダのインストーラを直接実行できます。終わったら、設定画面の「参照…」で作られた `ndlocr-lite-zotero` フォルダを選んでください（中のフォルダや、引用符付きのパスを貼り付けた場合も自動で直します）。
+Zotero からのセットアップがうまくいかないときは、このリポジトリの [`installer`](https://github.com/ryoryoryo3838/ndlocr-lite_for_zotero/tree/main/installer) フォルダのインストーラを直接実行できます（リポジトリの「Code → Download ZIP」でまとめて取得できます）。終わったら、設定画面の「参照…」で作られた `ndlocr-lite-zotero` フォルダを選んでください（中のフォルダや、引用符付きのパスを貼り付けた場合も自動で直します）。
 
 - macOS / Linux: ターミナルで `bash ` と入力し（最後に空白）、`install_mac.command` をドラッグ＆ドロップして Enter。macOS では Finder のダイアログで場所を選び、Linux ではインストール先のパスを入力します。
 - Windows: `install_windows.cmd` をダブルクリックし、ダイアログで場所を選びます。
@@ -73,6 +76,12 @@ Zotero からのセットアップがうまくいかないときは、`installer
 2. 認識結果を、添付の保存フォルダに `.zotero-ft-unprocessed` として置きます。これは、Zotero が全文同期で受け取ったテキストを置くのと同じ形式のファイルです。そのうえで Zotero 自身の索引処理（`Zotero.Fulltext.indexItems`）を呼び、検索用の索引に登録させます。
 3. OCR 結果は `.zotero-ndlocr.json` として同じフォルダに残します。「解除」はこのファイルを消して索引を外します。
 4. 透明テキスト付き PDF は、元の PDF の末尾に文字の層を追記（PDF の増分更新）して作ります。元の PDF のデータはそのまま残るので、しおり・文書情報・埋め込みの注釈なども引き継がれます。追記できない PDF（暗号化されたものなど）では、NDLOCR-Lite 標準の書き出しを使います。この場合、しおりと文書情報は引き継がれません。
+
+## 開発
+
+- `./build.sh` で `build/ndlocr-lite_for_zotero-<版>.xpi` を作ります。インストーラも `.xpi` に同梱します。
+- `NDLOCR_DIR=<インストール先> node tests/plugin-harness.js` で、Zotero を模した環境でプラグインのコードを動かすテストを実行します（OCR は本物の NDLOCR-Lite を使います。未インストールならセットアップから行います）。
+- リリース: `plugin/manifest.json` の `version` を上げて main にマージし、`v<版>` のタグを push すると、GitHub Actions が `.xpi` と自動更新用の `updates.json` を作って Release に載せます。
 
 ## 注意
 
