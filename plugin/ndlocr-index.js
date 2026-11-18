@@ -7,6 +7,9 @@
 //      受け取ったテキストを置く中間ファイル）として書き、Zotero.Fulltext.indexItems() で索引させる
 //      → Zotero 7〜10 で共通の経路。PDF 自体は変更しない
 //   3. 結果を `.zotero-ndlocr.json` に保存し、再索引で消えたときに自動で戻す
+//   4. 設定（pdfOutput）に応じて、NDLOCR-Lite が作る透明テキスト付き PDF を
+//      別の添付として追加する（attach、既定）か、元の PDF と差し替える（replace）。
+//      差し替えるときは元の PDF を Zotero データフォルダの ndlocr-lite-backup/ に退避し、「解除」で戻す
 
 var { Subprocess } = ChromeUtils.importESModule('resource://gre/modules/Subprocess.sys.mjs');
 
@@ -14,6 +17,7 @@ var PREF_PREFIX = 'extensions.zotero.ndlocrindex.';
 var PROCESSOR_CACHE = '.zotero-ft-unprocessed';
 var SIDECAR = '.zotero-ndlocr.json';
 var INSTALL_DIR_NAME = 'ndlocr-lite-zotero';
+var BACKUP_DIR_NAME = 'ndlocr-lite-backup';
 var MENU_IDS = {
 	itemSep: 'ndlocr-index-item-sep',
 	itemRun: 'ndlocr-index-item-run',
@@ -290,7 +294,8 @@ NDLOCRIndex = {
 
 	// ------------------------------------------------------------------ OCR
 
-	async runOCR(env, pdfPath, onPage) {
+	/** pdfDest を渡すと、透明テキスト付き PDF をそこへ移す */
+	async runOCR(env, pdfPath, onPage, pdfDest) {
 		const dpi = parseInt(this.pref('dpi')) || 150;
 		// 作業フォルダはインストール先の中（ASCII パス）に作り、入力も input.pdf にコピーする。
 		// 日本語を含むパスで NDLOCR-Lite が失敗するのを避けるため
@@ -300,8 +305,11 @@ NDLOCRIndex = {
 		try {
 			const input = PathUtils.join(work, 'input.pdf');
 			await IOUtils.copy(pdfPath, input);
+			// 透明テキスト付き PDF を元の PDF への追記として作るラッパー（.xpi の中からは実行できないので書き出す）
+			const runner = PathUtils.join(work, 'ndlocr_run.py');
+			await IOUtils.writeUTF8(runner, await Zotero.File.getContentsFromURLAsync(this.rootURI + 'ndlocr_run.py'));
 			const args = [
-				'-u', env.ocrPy,
+				'-u', runner, env.ocrPy,
 				'--sourcepdf', input,
 				'--output', outDir,
 				'--no-pdf-page-output',
@@ -324,6 +332,7 @@ NDLOCRIndex = {
 			const text = (await IOUtils.readUTF8(txtPath)).trim();
 			const json = await IOUtils.readJSON(jsonPath);
 			const pages = parseInt(json?.pdfinfo?.page_count) || 0;
+			if (pdfDest) await IOUtils.move(PathUtils.join(work, 'text-layer.pdf'), pdfDest);
 			return { text, pages, dpi };
 		}
 		finally {
@@ -354,7 +363,7 @@ NDLOCRIndex = {
 		}
 	},
 
-	async writeSidecar(item, result) {
+	async writeSidecar(item, result, extra) {
 		await IOUtils.writeJSON(PathUtils.join(this.storageDir(item), SIDECAR), {
 			tool: 'NDLOCR-Lite',
 			plugin: `${this.id} ${this.version}`,
@@ -362,7 +371,56 @@ NDLOCRIndex = {
 			dpi: result.dpi,
 			pages: result.pages,
 			text: result.text,
+			...extra,
 		});
+	},
+
+	// ------------------------------------------------------------------ 透明テキスト付き PDF
+
+	backupPath(item) {
+		return PathUtils.join(Zotero.DataDirectory.dir, BACKUP_DIR_NAME, String(item.libraryID), item.key, item.attachmentFilename);
+	},
+
+	/** 別の添付として追加する。前回追加したものが残っていれば、そのファイルを置き換える（注釈を残すため） */
+	async attachOCRPDF(item, pdf, side) {
+		const prev = side?.ocrItemKey && Zotero.Items.getByLibraryAndKey(item.libraryID, side.ocrItemKey);
+		const prevPath = prev && !prev.deleted && await prev.getFilePathAsync();
+		if (prevPath) {
+			await IOUtils.copy(pdf, prevPath);
+			await Zotero.Fulltext.indexItems([prev.id], { complete: true });
+			return prev.key;
+		}
+		const opts = { file: pdf, title: item.getField('title') + '（OCR）' };
+		if (item.parentItemID) opts.parentItemID = item.parentItemID;
+		else Object.assign(opts, { libraryID: item.libraryID, collections: item.getCollections() });
+		return (await Zotero.Attachments.importFromFile(opts)).key;
+	},
+
+	/** 元の PDF を退避してから差し替える。差し替え済みなら退避は上書きしない */
+	async replacePDF(item, path, pdf) {
+		const backup = this.backupPath(item);
+		if (!(await IOUtils.exists(backup))) {
+			await IOUtils.makeDirectory(PathUtils.parent(backup), { createAncestors: true, ignoreExisting: true });
+			await IOUtils.copy(path, backup);
+		}
+		await IOUtils.copy(pdf, path);
+		return {
+			backup,
+			originalMD5: await Zotero.Utilities.Internal.md5Async(backup),
+			replacedMD5: await Zotero.Utilities.Internal.md5Async(path),
+		};
+	},
+
+	/** 退避した元の PDF に戻す。差し替え後にファイルが変わっていたら戻さない */
+	async restorePDF(item, side) {
+		const path = await item.getFilePathAsync();
+		if (!path) throw new Error('ファイルがこの端末にないため、元の PDF に戻せません');
+		if (!(await IOUtils.exists(side.backup))) throw new Error(`元の PDF のバックアップが見つかりません: ${side.backup}`);
+		if ((await Zotero.Utilities.Internal.md5Async(path)) !== side.replacedMD5) {
+			throw new Error(`OCR 後にファイルが変更されているため、元の PDF に戻しませんでした。バックアップ: ${side.backup}`);
+		}
+		await IOUtils.copy(side.backup, path);
+		await IOUtils.remove(side.backup);
 	},
 
 	async applyIndex(item, text, pages) {
@@ -397,6 +455,8 @@ NDLOCRIndex = {
 	},
 
 	async removeIndex(item) {
+		const side = await this.readSidecar(item);
+		if (side?.replaced) await this.restorePDF(item, side);
 		this._removing.add(item.id);
 		try {
 			await IOUtils.remove(PathUtils.join(this.storageDir(item), SIDECAR), { ignoreAbsent: true });
@@ -524,16 +584,21 @@ NDLOCRIndex = {
 			return;
 		}
 		if (!Services.prompt.confirm(win, 'NDLOCR-Lite for Zotero',
-			`${targets.length} 件の PDF から OCR テキストの全文インデックスを外します。よろしいですか？`)) return;
+			`${targets.length} 件の PDF から OCR テキストの全文インデックスを外します。\n`
+			+ '差し替えた PDF は元の PDF に戻します。別の添付として追加した OCR 版の PDF は残ります（不要なら手動で削除してください）。\n\n'
+			+ 'よろしいですか？')) return;
+		const failed = [];
 		for (const item of targets) {
 			try {
 				await this.removeIndex(item);
 			}
 			catch (e) {
 				Zotero.logError(e);
+				failed.push(`${item.attachmentFilename}: ${e.message}`);
 			}
 		}
-		this.alert(win, `${targets.length} 件の OCR インデックスを解除しました。`);
+		this.alert(win, `${targets.length - failed.length} 件の OCR インデックスを解除しました。`
+			+ (failed.length ? `\n\n解除できなかったもの:\n${failed.join('\n')}` : ''));
 	},
 
 	cancel() {
@@ -583,17 +648,43 @@ NDLOCRIndex = {
 						skipped.push(`${name}（${c.skip}）`);
 						continue;
 					}
-					const result = await this.runOCR(env, c.path, (page, total) => {
-						prog.setText(`${head} OCR ${page}/${total} ページ: ${name}`);
-						prog.setProgress(Math.round((i + page / total) / n * 100));
-					});
-					if (!result.text) {
-						skipped.push(`${name}（文字を認識できませんでした）`);
-						continue;
+					const mode = this.pref('pdfOutput');
+					const side = await this.readSidecar(item);
+					// 差し替え済みの PDF を再 OCR するときは、退避した元の PDF から読む
+					const source = side?.replaced && await IOUtils.exists(side.backup) ? side.backup : c.path;
+					const pdf = mode === 'attach' || mode === 'replace'
+						? PathUtils.join(env.dir, 'work', `pdf-${Date.now()}-${Zotero.Utilities.randomString(6)}`,
+							item.attachmentFilename.replace(/\.pdf$/i, '') + '_OCR.pdf')
+						: null;
+					if (pdf) await IOUtils.makeDirectory(PathUtils.parent(pdf), { createAncestors: true });
+					try {
+						const result = await this.runOCR(env, source, (page, total) => {
+							prog.setText(`${head} OCR ${page}/${total} ページ: ${name}`);
+							prog.setProgress(Math.round((i + page / total) / n * 100));
+						}, pdf);
+						if (!result.text) {
+							skipped.push(`${name}（文字を認識できませんでした）`);
+							continue;
+						}
+						const extra = {};
+						if (mode === 'attach') {
+							extra.ocrItemKey = await this.attachOCRPDF(item, pdf, side);
+						}
+						else if (mode === 'replace') {
+							Object.assign(extra, { replaced: true }, await this.replacePDF(item, c.path, pdf));
+						}
+						if (side?.replaced && mode !== 'replace') {
+							// 以前に差し替えた PDF はそのまま残るので、「解除」で戻せるよう記録を引き継ぐ
+							const { replaced, backup, originalMD5, replacedMD5 } = side;
+							Object.assign(extra, { replaced, backup, originalMD5, replacedMD5 });
+						}
+						await this.applyIndex(item, result.text, result.pages);
+						await this.writeSidecar(item, result, extra);
+						done.push(name);
 					}
-					await this.applyIndex(item, result.text, result.pages);
-					await this.writeSidecar(item, result);
-					done.push(name);
+					finally {
+						if (pdf) await IOUtils.remove(PathUtils.parent(pdf), { recursive: true, ignoreAbsent: true });
+					}
 				}
 				catch (e) {
 					if (e.cancelled) break;
