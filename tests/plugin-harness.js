@@ -1,6 +1,7 @@
 // Zotero を模した環境でプラグインのコード（plugin/ndlocr-index.js）を動かすテスト。
 // OCR は本物の NDLOCR-Lite を使う。Zotero の全文インデックスは簡易的な模擬。
 //   NDLOCR_DIR=/path/to/ndlocr-lite-zotero node tests/plugin-harness.js
+// 最初に設定画面の「セットアップ」と同じ処理を NDLOCR_DIR に対して実行する（未インストールなら約 650MB をダウンロードして入れる）。
 const fs = require('fs'), path = require('path'), vm = require('vm'), cp = require('child_process');
 const os = require('os');
 const ROOT = path.resolve(__dirname, '..');
@@ -25,7 +26,7 @@ const IOUtils = {
   stat: async p => ({ type: fs.statSync(p).isDirectory() ? 'directory' : 'regular' }),
   remove: async (p, o) => fs.rmSync(p, { recursive: true, force: true }),
 };
-const PathUtils = { join: (...a) => { if (!path.isAbsolute(a[0])) throw new Error('not absolute'); return path.join(...a); }, parent: p => (p === '/' ? null : path.dirname(p)) };
+const PathUtils = { filename: p => path.basename(p), join: (...a) => { if (!path.isAbsolute(a[0])) throw new Error('not absolute'); return path.join(...a); }, parent: p => (p === '/' ? null : path.dirname(p)) };
 // ---- Subprocess (real process)
 const Subprocess = { call: async ({ command, arguments: args, workdir, environment }) => {
   const child = cp.spawn(command, args, { cwd: workdir, env: { ...process.env, ...environment } });
@@ -51,6 +52,7 @@ const Zotero = {
   isWin: process.platform === 'win32', Utilities: { randomString: n => Math.random().toString(36).slice(2, 2 + n), Internal: { openPreferences() {} } },
   Attachments: { LINK_MODE_LINKED_URL: 3, getStorageDirectory: it => ({ path: path.join(DATA, 'storage', it.key) }) },
   Items: { get: id => items[id] },
+  File: { getContentsFromURLAsync: async url => fs.readFileSync(url, 'utf8') },
   Fulltext: { SYNC_STATE_UNSYNCED: 0, SYNC_STATE_IN_SYNC: 1, getItemCacheFile: cacheFile,
     async indexItems(ids) { for (const id of ids) { const it = items[id]; const dir = path.join(DATA, 'storage', it.key); const pc = path.join(dir, '.zotero-ft-unprocessed');
       if (fs.existsSync(pc)) { const d = JSON.parse(fs.readFileSync(pc, 'utf8')); fs.writeFileSync(cacheFile(it).path, d.text); fs.unlinkSync(pc); fulltext[id] = { text: d.text, synced: 1, pages: d.indexedPages }; notify('index', [id]); continue; }
@@ -67,7 +69,7 @@ Zotero.ProgressWindow = function () { this.changeHeadline = () => {}; this.show 
   this.ItemProgress = function () { this.setText = t => pwText.push(t); this.setProgress = () => {}; }; };
 const ctx = vm.createContext({ Zotero, Services, IOUtils, PathUtils, Ci: {}, ChromeUtils: { importESModule: () => ({ Subprocess }) }, console, Date, Math, JSON, Error, Map, Set, String, parseInt, Promise });
 vm.runInContext('var NDLOCRIndex;' + fs.readFileSync(path.join(ROOT, 'plugin/ndlocr-index.js'), 'utf8') + ';this.P=NDLOCRIndex;', ctx);
-const P = ctx.P; P.init({ id: 'x', version: '0.1.0', rootURI: '' }); P.registerNotifier();
+const P = ctx.P; P.init({ id: 'x', version: '0.1.0', rootURI: ROOT + '/' }); P.registerNotifier();
 const win = { ZoteroPane: { getSelectedItems: () => [items[10]] } };
 let failures = 0;
 function check(name, cond, detail = '') { console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  ' + detail : ''}`); if (!cond) failures++; }
@@ -75,6 +77,17 @@ const sidecar = path.join(DATA, 'storage/AAAA1111/.zotero-ndlocr.json');
 const K = 'extensions.zotero.ndlocrindex.installDir';
 
 (async () => {
+  // セットアップ（同梱インストーラの実行）
+  const bad = await P.setup(path.join(os.tmpdir(), '日本語'));
+  check('setup: 全角文字を含む場所は断る', !bad.ok && /全角/.test(bad.msg));
+  Zotero.Prefs._p[K] = '';
+  const lines = [];
+  const s = await P.setup(NDLOCR_DIR, l => lines.push(l));
+  check('setup', s.ok && path.resolve(s.dir) === path.resolve(NDLOCR_DIR), s.msg.slice(-300));
+  check('setup: インストール先を設定に保存', Zotero.Prefs._p[K] === s.dir);
+  check('setup: 進捗を 1 行ずつ渡す', lines.some(l => l.includes('[4/4]')));
+  check('setup: 終了後は実行中でない', !P.running);
+
   // パスの正規化とインストール先の自動検出
   for (const v of [NDLOCR_DIR, `"${NDLOCR_DIR}${path.sep}"`, `  ${NDLOCR_DIR}${path.sep}${path.sep}  `,
     path.join(NDLOCR_DIR, 'ndlocr-lite', 'src'), path.join(NDLOCR_DIR, 'ndlocr-lite', 'src', 'ocr.py')]) {

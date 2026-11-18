@@ -13,6 +13,7 @@ var { Subprocess } = ChromeUtils.importESModule('resource://gre/modules/Subproce
 var PREF_PREFIX = 'extensions.zotero.ndlocrindex.';
 var PROCESSOR_CACHE = '.zotero-ft-unprocessed';
 var SIDECAR = '.zotero-ndlocr.json';
+var INSTALL_DIR_NAME = 'ndlocr-lite-zotero';
 var MENU_IDS = {
 	itemSep: 'ndlocr-index-item-sep',
 	itemRun: 'ndlocr-index-item-run',
@@ -149,7 +150,7 @@ NDLOCRIndex = {
 		const raw = this.pref('installDir');
 		const dir = this.resolveDir(raw);
 		if (!dir) {
-			return { ok: false, msg: 'NDLOCR-Lite のインストール先フォルダが未設定です。\n設定 → NDLOCR-Lite for Zotero で指定してください。' };
+			return { ok: false, msg: 'NDLOCR-Lite のインストール先フォルダが未設定です。\n設定 → NDLOCR-Lite for Zotero の「セットアップ」でインストールするか、インストール済みのフォルダを指定してください。' };
 		}
 		let start = dir;
 		try {
@@ -201,12 +202,17 @@ NDLOCRIndex = {
 	},
 
 	async _exec(env, args, onLine) {
+		return this._run(env.python, args, PathUtils.parent(env.ocrPy), onLine,
+			{ PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' });
+	},
+
+	async _run(command, args, workdir, onLine, environment) {
 		const proc = await Subprocess.call({
-			command: env.python,
+			command,
 			arguments: args,
-			workdir: PathUtils.parent(env.ocrPy),
+			workdir,
 			stderr: 'stdout',
-			environment: { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+			environment,
 			environmentAppend: true,
 		});
 		this.currentProc = proc;
@@ -218,7 +224,8 @@ NDLOCRIndex = {
 				output += chunk;
 				if (onLine) {
 					buf += chunk;
-					const lines = buf.split(/\r?\n/);
+					// curl の進捗表示は \r で行を書き換えるので、\r でも区切る
+					const lines = buf.split(/\r\n|\r|\n/);
 					buf = lines.pop();
 					for (const line of lines) onLine(line);
 				}
@@ -228,6 +235,56 @@ NDLOCRIndex = {
 		}
 		finally {
 			this.currentProc = null;
+		}
+	},
+
+	/**
+	 * 設定画面の「セットアップ」ボタン用。.xpi に同梱したインストーラを取り出して実行する。
+	 * picked の中に ndlocr-lite-zotero フォルダを作る（既存のインストール先を選んだ場合はそこに入れ直す）
+	 */
+	async setup(picked, onLine) {
+		picked = this.resolveDir(picked);
+		if (/[^\x20-\x7E]/.test(picked)) {
+			return { ok: false, msg: `場所のパスに日本語などの全角文字が含まれています。英数字だけのパスの場所を選んでください: ${picked}` };
+		}
+		if (this.running) {
+			return { ok: false, msg: 'OCR かセットアップを実行中です。終わってからもう一度実行してください。' };
+		}
+		const existing = await IOUtils.exists(PathUtils.join(picked, '.venv'))
+			|| await IOUtils.exists(PathUtils.join(picked, 'ndlocr-lite'))
+			|| PathUtils.filename(picked) === INSTALL_DIR_NAME;
+		const dir = existing ? picked : PathUtils.join(picked, INSTALL_DIR_NAME);
+
+		this.running = true;
+		this.cancelRequested = false;
+		try {
+			await IOUtils.makeDirectory(dir, { createAncestors: true });
+			// .xpi の中のファイルは外部プロセスから読めないので、インストール先に書き出してから実行する
+			const name = Zotero.isWin ? 'install_windows.ps1' : 'install_mac.command';
+			let script = await Zotero.File.getContentsFromURLAsync(this.rootURI + 'installer/' + name);
+			// PowerShell 5.1 は BOM がないと UTF-8 として読まない
+			if (Zotero.isWin && !script.startsWith('\uFEFF')) script = '\uFEFF' + script;
+			const scriptPath = PathUtils.join(dir, name);
+			await IOUtils.writeUTF8(scriptPath, script);
+			const [command, args] = Zotero.isWin
+				? [await Subprocess.pathSearch('powershell.exe'),
+					['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-InstallDir', dir]]
+				: ['/bin/bash', [scriptPath, dir]];
+			const res = await this._run(command, args, dir, onLine, { NDLOCR_FROM_ZOTERO: '1' });
+			if (this.cancelRequested) return { ok: false, dir, msg: '中止しました。もう一度セットアップすると続きから入れ直します。' };
+			if (res.exitCode !== 0) {
+				return { ok: false, dir, msg: `インストールに失敗しました（終了コード ${res.exitCode}）:\n${res.output.slice(-1500)}` };
+			}
+			Zotero.Prefs.set(PREF_PREFIX + 'installDir', dir, true);
+			return { ok: true, dir, msg: `インストールしました: ${dir}` };
+		}
+		catch (e) {
+			this.log(e);
+			return { ok: false, dir, msg: `インストールに失敗しました: ${e.message}` };
+		}
+		finally {
+			this.running = false;
+			this.cancelRequested = false;
 		}
 	},
 
@@ -492,7 +549,7 @@ NDLOCRIndex = {
 
 	async runBatch(win, items, { force, label }) {
 		if (this.running) {
-			this.alert(win, 'すでに OCR を実行中です。終わるまで待つか、ツールメニューから中止してください。');
+			this.alert(win, 'すでに OCR かセットアップを実行中です。終わるまで待つか、ツールメニューから中止してください。');
 			return;
 		}
 		const env = await this.checkEnv();
