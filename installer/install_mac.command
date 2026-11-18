@@ -19,6 +19,10 @@ DEFAULT_DIR="$HOME/$DIR_NAME"
 
 echo "=== NDLOCR-Lite インストーラ（NDLOCR-Lite ${NDLOCR_VERSION}）==="
 
+# 存在しない証明書を指す環境変数があると curl と uv が失敗する（Flatpak 版 Zotero にホストの設定が引き継がれたときなど）
+if [ -n "${SSL_CERT_FILE:-}" ] && [ ! -e "$SSL_CERT_FILE" ]; then unset SSL_CERT_FILE; fi
+if [ -n "${SSL_CERT_DIR:-}" ] && [ ! -d "$SSL_CERT_DIR" ]; then unset SSL_CERT_DIR; fi
+
 for c in curl unzip; do
   if ! command -v "$c" >/dev/null; then
     echo "エラー: $c が見つかりません。先にインストールしてください（Debian / Ubuntu: sudo apt install curl unzip）" >&2

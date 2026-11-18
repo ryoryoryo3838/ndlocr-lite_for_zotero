@@ -64,7 +64,7 @@ const Zotero = {
       return added[id] = mkAtt(id, key, path.basename(file), { parentItemID, title, nativeText: 'text layer' }); } },
   Items: { get: id => items[id], getByLibraryAndKey: (lib, key) => Object.values(items).find(it => it.key === key) || false },
   // .xpi の中では plugin/ の中身が直下に、installer/ はそのまま入る
-  File: { getContentsFromURLAsync: async url => fs.readFileSync(fs.existsSync(url) ? url : path.join(ROOT, 'plugin', path.relative(ROOT, url)), 'utf8') },
+  File: { getResourceAsync: async url => fs.readFileSync(fs.existsSync(url) ? url : path.join(ROOT, 'plugin', path.relative(ROOT, url)), 'utf8') },
   Fulltext: { SYNC_STATE_UNSYNCED: 0, SYNC_STATE_IN_SYNC: 1, getItemCacheFile: cacheFile,
     async indexItems(ids) { for (const id of ids) { const it = items[id]; const dir = path.join(DATA, 'storage', it.key); const pc = path.join(dir, '.zotero-ft-unprocessed');
       if (fs.existsSync(pc)) { const d = JSON.parse(fs.readFileSync(pc, 'utf8')); fs.writeFileSync(cacheFile(it).path, d.text); fs.unlinkSync(pc); fulltext[id] = { text: d.text, synced: 1, pages: d.indexedPages }; notify('index', [id]); continue; }

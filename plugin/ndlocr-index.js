@@ -274,7 +274,8 @@ NDLOCRIndex = {
 			await IOUtils.makeDirectory(dir, { createAncestors: true });
 			// .xpi の中のファイルは外部プロセスから読めないので、インストール先に書き出してから実行する
 			const name = Zotero.isWin ? 'install_windows.ps1' : 'install_mac.command';
-			let script = await Zotero.File.getContentsFromURLAsync(this.rootURI + 'installer/' + name);
+			// getContentsFromURLAsync（HTTP 用）は .xpi のパスの @ を扱えないので getResourceAsync を使う
+			let script = await Zotero.File.getResourceAsync(this.rootURI + 'installer/' + name);
 			// PowerShell 5.1 は BOM がないと UTF-8 として読まない
 			if (Zotero.isWin && !script.startsWith('\uFEFF')) script = '\uFEFF' + script;
 			const scriptPath = PathUtils.join(dir, name);
@@ -316,7 +317,7 @@ NDLOCRIndex = {
 			await IOUtils.copy(pdfPath, input);
 			// 透明テキスト付き PDF を元の PDF への追記として作るラッパー（.xpi の中からは実行できないので書き出す）
 			const runner = PathUtils.join(work, 'ndlocr_run.py');
-			await IOUtils.writeUTF8(runner, await Zotero.File.getContentsFromURLAsync(this.rootURI + 'ndlocr_run.py'));
+			await IOUtils.writeUTF8(runner, await Zotero.File.getResourceAsync(this.rootURI + 'ndlocr_run.py'));
 			const args = [
 				'-u', runner, env.ocrPy,
 				'--sourcepdf', input,
