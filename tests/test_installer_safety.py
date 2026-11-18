@@ -254,9 +254,13 @@ exit 0
                 curl.write_text('#!/bin/sh\nexit 99\n')
                 curl.chmod(0o755)
                 env = {**os.environ, 'HOME': tmp, 'PATH': f'{fakebin}:/usr/bin:/bin', 'NDLOCR_FROM_ZOTERO': '1'}
-                result = subprocess.run(['bash', str(SCRIPT), str(dest)], env=env, capture_output=True, text=True, timeout=10)
+                result = subprocess.run(['bash', str(SCRIPT), str(dest)], env=env, capture_output=True, timeout=10)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn('unmarked', result.stderr.lower())
+                try:
+                    stderr = result.stderr.decode('utf-8')
+                except UnicodeDecodeError as exc:
+                    self.fail(f'installer stderr is not UTF-8: {exc}; bytes={result.stderr!r}')
+                self.assertIn('unmarked', stderr.lower())
                 self.assertEqual((item / 'important').read_text(), 'keep')
 
 
