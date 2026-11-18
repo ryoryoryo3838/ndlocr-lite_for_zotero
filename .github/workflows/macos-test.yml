@@ -17,7 +17,6 @@ jobs:
       matrix:
         runner: [macos-15, macos-15-intel]
     env:
-      NDLOCR_DIR: ${{ runner.temp }}/ndlocr-lite-zotero
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +28,10 @@ jobs:
           node tests/review-safety.js
           python3 -B tests/test_installer_safety.py
       - name: Install NDLOCR-Lite and run OCR integration tests
+        env:
+          NDLOCR_DIR: ${{ runner.temp }}/ndlocr-lite-zotero
         run: node tests/plugin-harness.js
       - name: PDF geometry tests
+        env:
+          NDLOCR_DIR: ${{ runner.temp }}/ndlocr-lite-zotero
         run: '"$NDLOCR_DIR/.venv/bin/python" -B tests/test_pdf_geometry.py'
