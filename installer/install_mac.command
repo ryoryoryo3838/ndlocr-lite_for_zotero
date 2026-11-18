@@ -79,7 +79,7 @@ echo "インストール先: $dir"
 # Never adopt or replace pre-existing directories without an installation marker.
 source_pending="$dir/ndlocr-lite/.ndlocr-zotero-source-pending"
 if [ ! -f "$dir/ndlocr-lite/.installed-version" ] && { [ -e "$dir/ndlocr-lite" ] || [ -L "$dir/ndlocr-lite" ]; } && ! { [ ! -L "$source_pending" ] && [ -f "$source_pending" ] && [ "$(cat "$source_pending")" = 'ndlocr-lite-zotero-source-v1' ]; }; then
-  echo "エラー: unmarked ndlocr-lite exists: $dir。既存データは変更せず、別の空のインストール先を選んでください。" >&2
+  echo "エラー: unmarked ndlocr-lite exists: ${dir}。既存データは変更せず、別の空のインストール先を選んでください。" >&2
   exit 1
 fi
 if [ -L "$dir/ndlocr-lite" ] || [ -L "$dir/.venv" ]; then
