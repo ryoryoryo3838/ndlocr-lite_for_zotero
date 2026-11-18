@@ -1,0 +1,52 @@
+# v<版> のタグを push すると、.xpi と自動更新用の updates.json を作って GitHub Release に載せる。
+# タグの版は plugin/manifest.json の version と一致させる。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: タグと manifest.json の版を照合
+        run: |
+          version=$(python3 -c "import json;print(json.load(open('plugin/manifest.json'))['version'])")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "タグ $GITHUB_REF_NAME と manifest.json の版 $version が一致しません" >&2
+            exit 1
+          fi
+
+      - name: .xpi を作る
+        run: sh build.sh
+
+      - name: updates.json を作る
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          m = json.load(open('plugin/manifest.json'))
+          app = m['applications']['zotero']
+          xpi = next(pathlib.Path('build').glob('*.xpi'))
+          url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['GITHUB_REF_NAME']}/{xpi.name}"
+          updates = {'addons': {app['id']: {'updates': [{
+              'version': m['version'],
+              'update_link': url,
+              'update_hash': 'sha256:' + hashlib.sha256(xpi.read_bytes()).hexdigest(),
+              'applications': {'zotero': {
+                  'strict_min_version': app['strict_min_version'],
+                  'strict_max_version': app['strict_max_version'],
+              }},
+          }]}}}
+          json.dump(updates, open('build/updates.json', 'w'), indent=2)
+          PY
+
+      - name: GitHub Release を作る
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" build/*.xpi build/updates.json --title "$GITHUB_REF_NAME" --generate-notes

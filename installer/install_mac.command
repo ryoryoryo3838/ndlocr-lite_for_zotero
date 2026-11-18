@@ -1,8 +1,8 @@
 #!/bin/bash
-# NDLOCR-Lite を Zotero プラグイン「NDLOCR-Lite for Zotero」用に 1 つのフォルダへまとめてインストールする（macOS）。
+# NDLOCR-Lite を Zotero プラグイン「NDLOCR-Lite for Zotero」用に 1 つのフォルダへまとめてインストールする（macOS / Linux）。
 #
 #   bash install_mac.command            … Finder のダイアログでインストール場所を選ぶ
-#   bash install_mac.command <フォルダ>  … インストール先を直接指定する
+#   bash install_mac.command <フォルダ>  … インストール先を直接指定する（Zotero の設定画面の「セットアップ」はこの形で実行する）
 #
 # フォルダの中身:
 #   uv/            パッケージ管理ツール uv
@@ -19,8 +19,20 @@ DEFAULT_DIR="$HOME/$DIR_NAME"
 
 echo "=== NDLOCR-Lite インストーラ（NDLOCR-Lite ${NDLOCR_VERSION}）==="
 
+# 存在しない証明書を指す環境変数があると curl と uv が失敗する（Flatpak 版 Zotero にホストの設定が引き継がれたときなど）
+if [ -n "${SSL_CERT_FILE:-}" ] && [ ! -e "$SSL_CERT_FILE" ]; then unset SSL_CERT_FILE; fi
+if [ -n "${SSL_CERT_DIR:-}" ] && [ ! -d "$SSL_CERT_DIR" ]; then unset SSL_CERT_DIR; fi
+
+for c in curl unzip; do
+  if ! command -v "$c" >/dev/null; then
+    echo "エラー: $c が見つかりません。先にインストールしてください（Debian / Ubuntu: sudo apt install curl unzip）" >&2
+    exit 1
+  fi
+done
+
 is_ascii() { ! LC_ALL=C printf '%s' "$1" | LC_ALL=C grep -q '[^ -~]'; }
-gui_alert() { [ "$(uname -s)" = Darwin ] && osascript -e "display alert \"NDLOCR-Lite インストーラ\" message \"$1\"" >/dev/null 2>&1 || true; }
+# Zotero のセットアップから実行したとき（NDLOCR_FROM_ZOTERO=1）はダイアログを出さない
+gui_alert() { [ -z "${NDLOCR_FROM_ZOTERO:-}" ] && [ "$(uname -s)" = Darwin ] && osascript -e "display alert \"NDLOCR-Lite インストーラ\" message \"$1\"" >/dev/null 2>&1 || true; }
 
 dir="${1:-}"
 if [ -z "$dir" ]; then

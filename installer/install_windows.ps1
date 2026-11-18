@@ -2,7 +2,7 @@
 # install_windows.cmd をダブルクリックして実行する。
 #
 # インストール場所はエクスプローラーのダイアログで選ぶ（選んだ場所の中に ndlocr-lite-zotero フォルダを作る）。
-# -InstallDir <フォルダ> を付けると、ダイアログを出さずにそのフォルダへ入れる。
+# -InstallDir <フォルダ> を付けると、ダイアログを出さずにそのフォルダへ入れる（Zotero の設定画面の「セットアップ」はこの形で実行する）。
 #
 # フォルダの中身:
 #   uv\            パッケージ管理ツール uv（既に入っていればそれを使い、ここには入れない）
@@ -14,7 +14,8 @@ param([string]$InstallDir = "")
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# Zotero から実行したときはコンソールがないので、設定できなくても続ける
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 
@@ -26,6 +27,7 @@ $Title = 'NDLOCR-Lite インストーラ'
 function Test-Ascii([string]$s) { return -not ($s -match '[^\x20-\x7E]') }
 
 function Show-Message([string]$text, [string]$icon = 'Information') {
+    if ($env:NDLOCR_FROM_ZOTERO) { return }  # Zotero のセットアップから実行したときはダイアログを出さない
     [void][System.Windows.Forms.MessageBox]::Show($text, $Title, 'OK', $icon)
 }
 

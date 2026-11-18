@@ -1,12 +1,12 @@
 {
   "manifest_version": 2,
   "name": "NDLOCR-Lite for Zotero",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "NDLOCR-Lite で PDF を OCR し、Zotero の全文インデックスに登録します（PDF は変更しません）",
   "applications": {
     "zotero": {
       "id": "ndlocr-index@zotero-plugin.local",
-      "update_url": "https://example.invalid/ndlocr-index/updates.json",
+      "update_url": "https://github.com/ryoryoryo3838/ndlocr-lite_for_zotero/releases/latest/download/updates.json",
       "strict_min_version": "6.999",
       "strict_max_version": "10.*"
     }
