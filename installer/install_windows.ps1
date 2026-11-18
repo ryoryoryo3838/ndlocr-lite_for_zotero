@@ -48,7 +48,7 @@ function Select-InstallDir {
     }
     finally { $owner.Dispose() }
     # 既存のインストール先を選んだ場合はそのまま使う
-    if ((Test-Path (Join-Path $picked '.venv')) -or (Test-Path (Join-Path $picked 'ndlocr-lite')) -or ((Split-Path $picked -Leaf) -eq $DirName)) {
+    if ((Test-Path (Join-Path $picked 'ndlocr-lite\.installed-version') -PathType Leaf) -or ((Split-Path $picked -Leaf) -eq $DirName)) {
         return $picked
     }
     return (Join-Path $picked $DirName)
@@ -89,6 +89,30 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $dir = (Resolve-Path $InstallDir).Path
 Write-Host "インストール先: $dir"
 
+$ndlPath = Join-Path $dir 'ndlocr-lite'
+$venvPath = Join-Path $dir '.venv'
+$marker = Join-Path $ndlPath '.installed-version'
+if (-not (Test-Path $marker -PathType Leaf) -and (Test-Path $ndlPath)) {
+    throw "unmarked ndlocr-lite or .venv exists: $dir。既存データは変更せず、別の空のインストール先を選んでください。"
+}
+foreach ($path in @($ndlPath, $venvPath)) {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "install directories must not be reparse points: $path"
+    }
+}
+$venvMarker = Join-Path $venvPath '.ndlocr-zotero-venv'
+$venvExists = Test-Path -LiteralPath $venvPath
+if ($venvExists) {
+    $markerItem = Get-Item -LiteralPath $venvMarker -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $venvPath -PathType Container) -or -not $markerItem -or $markerItem.PSIsContainer -or ($markerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ((Get-Content -LiteralPath $venvMarker -First 1) -cne 'ndlocr-lite-zotero-venv-v1')) {
+        throw "既存の .venv がこのインストーラのものか確認できません。データを保護するため変更しません。別の空のインストール先を選んでください: $venvPath"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $venvPath 'Scripts\python.exe') -PathType Leaf)) {
+        throw "既存の .venv の Python が見つかりません。既存データは変更せず、別の空のインストール先を選んでください: $venvPath"
+    }
+}
+
 $target = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
 if ($target -like 'aarch64*') { Write-Warning 'ARM 版 Windows での動作は確認していません。' }
 
@@ -119,7 +143,10 @@ try {
     } else {
         Write-Host '[1/4] uv をダウンロード中…'
         $uvZip = Join-Path $tmp 'uv.zip'
-        Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-$target.zip" -OutFile $uvZip
+        # SHA256 digests from the GitHub release assets for uv 0.8.22.
+        $uvHash = if ($target -like 'aarch64*') { 'dbb3a5bd06d20c9ab8bb9a79c7c4fb5832ca1c7ba5f231a020bc92e5a3c6dcf4' } else { '5049375aa2a5162f132b2c1cb992e25d42d47d934cab8c174dbe6f60973dcc12' }
+        Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/download/0.8.22/uv-$target.zip" -OutFile $uvZip
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $uvZip).Hash -ne $uvHash) { throw 'uv SHA256 mismatch' }
         Expand-Zip $uvZip (Join-Path $dir 'uv')
         $uv = $bundledUv
     }
@@ -143,10 +170,10 @@ try {
         }
         $srcOut = Join-Path $tmp 'src'
         Expand-Zip $srcZip $srcOut
-        if (Test-Path $ndlDir) { Remove-Item -Recurse -Force $ndlDir }
+        if (Get-Item -LiteralPath $ndlDir -Force -ErrorAction SilentlyContinue) { throw "既存の ndlocr-lite は置き換えません。別の空のインストール先を選んでください: $ndlDir" }
         $top = Get-ChildItem -Directory $srcOut | Select-Object -First 1
-        Move-Item $top.FullName $ndlDir
-        Set-Content -Path $verFile -Value $NdlocrVersion -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $top.FullName '.installed-version') -Value $NdlocrVersion -Encoding ASCII
+        [System.IO.Directory]::Move($top.FullName, $ndlDir)
     } else {
         Write-Host "[2/4] NDLOCR-Lite $NdlocrVersion はインストール済み"
     }
@@ -154,9 +181,12 @@ try {
     # 3. Python 環境（GUI 用の flet は不要なので除く）
     Write-Host "[3/4] Python $PyVersion と依存パッケージをインストール中…"
     $venvPy = Join-Path $dir '.venv\Scripts\python.exe'
-    if (-not (Test-Path $venvPy)) {
+    if (-not $venvExists) {
+        New-Item -ItemType Directory -Path $venvPath | Out-Null
         & $uv venv --python $PyVersion (Join-Path $dir '.venv')
         if ($LASTEXITCODE -ne 0) { throw 'Python 環境の作成に失敗しました' }
+        if (-not (Test-Path -LiteralPath $venvPy -PathType Leaf)) { throw 'Python 環境が作成されませんでした' }
+        Set-Content -LiteralPath $venvMarker -Value 'ndlocr-lite-zotero-venv-v1' -Encoding ASCII
     }
     $req = Join-Path $dir 'requirements-cli.txt'
     Get-Content (Join-Path $ndlDir 'requirements.txt') | Where-Object { $_ -notmatch '^(?i)flet' } | Set-Content -Path $req -Encoding ASCII

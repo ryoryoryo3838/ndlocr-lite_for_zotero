@@ -48,6 +48,7 @@ NDLOCRIndex = {
 	currentProc: null,
 	_applying: new Set(),
 	_removing: new Set(),
+	_replacing: new Set(),
 
 	init({ id, version, rootURI }) {
 		this.id = id;
@@ -271,9 +272,9 @@ NDLOCRIndex = {
 		if (this.running) {
 			return { ok: false, msg: 'OCR かセットアップを実行中です。終わってからもう一度実行してください。' };
 		}
-		const existing = await IOUtils.exists(PathUtils.join(picked, '.venv'))
-			|| await IOUtils.exists(PathUtils.join(picked, 'ndlocr-lite'))
-			|| PathUtils.filename(picked) === INSTALL_DIR_NAME;
+		const env = this._envPaths(picked);
+		const existing = PathUtils.filename(picked) === INSTALL_DIR_NAME
+			|| (await IOUtils.exists(env.python) && await IOUtils.exists(env.ocrPy));
 		const dir = existing ? picked : PathUtils.join(picked, INSTALL_DIR_NAME);
 
 		this.running = true;
@@ -293,7 +294,7 @@ NDLOCRIndex = {
 					['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-InstallDir', dir]]
 				: ['/bin/bash', [scriptPath, dir]];
 			const res = await this._run(command, args, dir, onLine, { NDLOCR_FROM_ZOTERO: '1' });
-			if (this.cancelRequested) return { ok: false, dir, msg: '中止しました。もう一度セットアップすると続きから入れ直します。' };
+			if (this.cancelRequested) return { ok: false, dir, msg: '中止しました。セットアップは未完了です。再実行する場合は別の保存先を選んでください。' };
 			if (res.exitCode !== 0) {
 				return { ok: false, dir, msg: `インストールに失敗しました（終了コード ${res.exitCode}）:\n${res.output.slice(-1500)}` };
 			}
@@ -375,24 +376,65 @@ NDLOCRIndex = {
 	async readSidecar(item) {
 		const path = PathUtils.join(this.storageDir(item), SIDECAR);
 		if (!(await IOUtils.exists(path))) return null;
+		let side;
 		try {
-			return await IOUtils.readJSON(path);
+			side = await IOUtils.readJSON(path);
 		}
 		catch (e) {
 			return null;
 		}
+		if (side.pendingRestore) {
+			if (this._replacing.has(item.id)) throw new Error('PDF の復元を実行中です');
+			const pdf = await item.getFilePathAsync();
+			if (!pdf) throw new Error('復元の復旧に必要な PDF がありません');
+			const current = await Zotero.Utilities.Internal.md5Async(pdf);
+			if (current === side.originalMD5) {
+				const { pendingRestore, backup, originalMD5, originalSize, replacedMD5, replaced, ...rest } = side;
+				await this.writeSidecar(item, rest, rest);
+				return rest;
+			}
+			if (current !== side.replacedMD5) throw new Error('復元の途中で PDF が変更されたため、自動復旧できません');
+			const { pendingRestore, ...previous } = side;
+			await this.writeSidecar(item, previous, previous);
+			return previous;
+		}
+		if (!side.pendingReplacement) return side;
+		if (this._replacing.has(item.id)) throw new Error('PDF の差し替えを実行中です');
+		const { inputMD5, previous } = side.pendingReplacement;
+		const pdf = await item.getFilePathAsync();
+		if (!pdf) throw new Error('差し替えの復旧に必要な PDF がありません');
+		const currentMD5 = await Zotero.Utilities.Internal.md5Async(pdf);
+		if (currentMD5 === inputMD5) {
+			if (previous) await this.writeSidecar(item, previous, previous);
+			else await IOUtils.remove(path, { ignoreAbsent: true });
+			return previous;
+		}
+		if (currentMD5 !== side.replacedMD5) {
+			throw new Error('差し替えの途中で PDF が変更されたため、自動復旧できません');
+		}
+		const { pendingReplacement, ...committed } = side;
+		await this.writeSidecar(item, committed, committed);
+		return committed;
 	},
 
 	async writeSidecar(item, result, extra) {
-		await IOUtils.writeJSON(PathUtils.join(this.storageDir(item), SIDECAR), {
-			tool: 'NDLOCR-Lite',
-			plugin: `${this.id} ${this.version}`,
-			date: new Date().toISOString(),
-			dpi: result.dpi,
-			pages: result.pages,
-			text: result.text,
-			...extra,
-		});
+		const path = PathUtils.join(this.storageDir(item), SIDECAR);
+		const tmp = path + '.tmp-' + Zotero.Utilities.randomString(8);
+		try {
+			await IOUtils.writeJSON(tmp, {
+				tool: 'NDLOCR-Lite',
+				plugin: `${this.id} ${this.version}`,
+				date: new Date().toISOString(),
+				dpi: result.dpi,
+				pages: result.pages,
+				text: result.text,
+				...extra,
+			});
+			await IOUtils.move(tmp, path);
+		}
+		finally {
+			await IOUtils.remove(tmp, { ignoreAbsent: true });
+		}
 	},
 
 	// ------------------------------------------------------------------ 透明テキスト付き PDF
@@ -420,40 +462,100 @@ NDLOCRIndex = {
 	 * 透明テキスト付き PDF で差し替える。差し替え済みなら、元の PDF の情報とバックアップは最初のものを引き継ぐ。
 	 * sourceIsOriginal: OCR の入力が元の PDF だったか（なら追記分を取り除けば元に戻る）
 	 */
-	async replacePDF(item, path, pdf, side, { incremental, sourceIsOriginal }) {
+	async replacePDF(item, path, pdf, side, { incremental, sourceIsOriginal, result, inputMD5 }) {
 		const md5 = p => Zotero.Utilities.Internal.md5Async(p);
 		const prev = side?.replaced ? side : null;
-		const originalMD5 = prev ? prev.originalMD5 : await md5(path);
+		if (await md5(path) !== inputMD5 || (prev && inputMD5 !== prev.replacedMD5)) {
+			throw new Error('OCR 中にファイルが変更されたため、差し替えませんでした');
+		}
+		const originalMD5 = prev ? prev.originalMD5 : inputMD5;
 		const originalSize = prev ? prev.originalSize : (await IOUtils.stat(path)).size;
 		const truncatable = incremental && sourceIsOriginal && !!originalSize;
+		if (truncatable) {
+			const check = pdf + '.original-check-' + Zotero.Utilities.randomString(8);
+			try {
+				if (!(await this.truncateToOriginal(pdf, { originalSize, originalMD5 }, check))) {
+					throw new Error('OCR の出力から元の PDF を復元できないため、差し替えませんでした');
+				}
+			}
+			finally { await IOUtils.remove(check, { ignoreAbsent: true }); }
+		}
 		let backup = prev?.backup && await IOUtils.exists(prev.backup) ? prev.backup : null;
+		if (backup && await md5(backup) !== originalMD5) {
+			throw new Error('バックアップが元の PDF と一致しないため、差し替えませんでした');
+		}
 		// 追記分を取り除いて戻せないときは、バックアップしない設定でも退避する
-		if (!prev && (this.pref('backupOriginal') || !truncatable)) {
+		if (!backup && (!prev ? (this.pref('backupOriginal') || !truncatable) : !truncatable)) {
 			backup = this.backupPath(item);
 			await IOUtils.makeDirectory(PathUtils.parent(backup), { createAncestors: true, ignoreExisting: true });
-			await IOUtils.copy(path, backup);
+			if (await IOUtils.exists(backup)) {
+				if (await md5(backup) !== originalMD5) throw new Error(`既存のバックアップを上書きしません: ${backup}`);
+			}
+			else if (prev) {
+				if (!(await this.truncateToOriginal(path, prev, backup))) {
+					throw new Error('元の PDF を復元できないため、差し替えませんでした');
+				}
+			}
+			else {
+				const tmp = backup + '.tmp-' + Zotero.Utilities.randomString(8);
+				try {
+					await IOUtils.copy(path, tmp);
+					if (await md5(tmp) !== originalMD5) throw new Error('バックアップの検証に失敗しました');
+					await IOUtils.move(tmp, backup, { noOverwrite: true });
+				}
+				finally { await IOUtils.remove(tmp, { ignoreAbsent: true }); }
+			}
 		}
-		await IOUtils.copy(pdf, path);
-		return {
-			replaced: true,
-			backup,
-			originalMD5,
-			originalSize: truncatable ? originalSize : null,
-			replacedMD5: await md5(path),
-		};
+		const staged = path + '.ndlocr-tmp-' + Zotero.Utilities.randomString(8);
+		this._replacing.add(item.id);
+		try {
+			await IOUtils.copy(pdf, staged);
+			const extra = { replaced: true, backup, originalMD5,
+				originalSize: truncatable ? originalSize : null, replacedMD5: await md5(staged) };
+			if (await md5(path) !== inputMD5 || (prev && inputMD5 !== prev.replacedMD5)) {
+				throw new Error('OCR 中にファイルが変更されたため、差し替えませんでした');
+			}
+			await this.writeSidecar(item, result, { ...extra, pendingReplacement: { inputMD5, previous: side || null } });
+			if (await md5(path) !== inputMD5 || (prev && inputMD5 !== prev.replacedMD5)) {
+				throw new Error('OCR 中にファイルが変更されたため、差し替えませんでした');
+			}
+			await IOUtils.move(staged, path);
+			return extra;
+		}
+		finally {
+			this._replacing.delete(item.id);
+			await IOUtils.remove(staged, { ignoreAbsent: true });
+		}
 	},
 
 	/** 差し替えた PDF（増分更新）の追記分を取り除いて dest に書く。元の PDF と一致しなければ書かずに false */
-	async truncateToOriginal(path, side, dest) {
+	async truncateToOriginal(path, side, dest, expectedMD5 = null) {
 		if (!side?.originalSize) return false;
 		const tmp = dest + '.ndlocr-tmp';
-		await IOUtils.write(tmp, await IOUtils.read(path, { maxBytes: side.originalSize }));
-		if ((await Zotero.Utilities.Internal.md5Async(tmp)) !== side.originalMD5) {
-			await IOUtils.remove(tmp);
-			return false;
+		try {
+			await IOUtils.write(tmp, await IOUtils.read(path, { maxBytes: side.originalSize }));
+			if ((await Zotero.Utilities.Internal.md5Async(tmp)) !== side.originalMD5) return false;
+			if (expectedMD5 && await Zotero.Utilities.Internal.md5Async(path) !== expectedMD5) {
+				throw new Error('復元中にファイルが変更されたため、元に戻しませんでした');
+			}
+			await IOUtils.move(tmp, dest);
+			return true;
 		}
-		await IOUtils.move(tmp, dest);
-		return true;
+		finally {
+			await IOUtils.remove(tmp, { ignoreAbsent: true });
+		}
+	},
+
+	/** 復元の前に記録し、途中で停止しても PDF のハッシュから復旧する。 */
+	async restoreWithJournal(item, side) {
+		this._replacing.add(item.id);
+		try {
+			await this.writeSidecar(item, side, { ...side, pendingRestore: true });
+			await this.restorePDF(item, side);
+			const { backup, originalMD5, originalSize, replacedMD5, replaced, ...rest } = side;
+			await this.writeSidecar(item, rest, rest);
+		}
+		finally { this._replacing.delete(item.id); }
 	},
 
 	/** 元の PDF に戻す。差し替え後にファイルが変わっていたら戻さない */
@@ -465,10 +567,24 @@ NDLOCRIndex = {
 				+ (side.backup ? `。バックアップ: ${side.backup}` : ''));
 		}
 		if (side.backup && await IOUtils.exists(side.backup)) {
-			await IOUtils.copy(side.backup, path);
-			await IOUtils.remove(side.backup);
+			const tmp = path + '.ndlocr-restore-' + Zotero.Utilities.randomString(8);
+			try {
+				await IOUtils.copy(side.backup, tmp);
+				if (await Zotero.Utilities.Internal.md5Async(tmp) !== side.originalMD5) {
+					throw new Error('バックアップが元の PDF と一致しません');
+				}
+				if (await Zotero.Utilities.Internal.md5Async(path) !== side.replacedMD5) {
+					throw new Error('復元中にファイルが変更されたため、元に戻しませんでした');
+				}
+				// shortcut: hash check and move are not a cross-process CAS; concurrent edits can still race.
+				await IOUtils.move(tmp, path);
+			}
+			finally {
+				await IOUtils.remove(tmp, { ignoreAbsent: true });
+			}
+			// バックアップは利用者の変更や途中停止に備えて残す。
 		}
-		else if (!(await this.truncateToOriginal(path, side, path))) {
+		else if (!(await this.truncateToOriginal(path, side, path, side.replacedMD5))) {
 			throw new Error('元の PDF のバックアップがなく、追記分を取り除いても元の PDF に戻りませんでした');
 		}
 	},
@@ -506,7 +622,7 @@ NDLOCRIndex = {
 
 	async removeIndex(item) {
 		const side = await this.readSidecar(item);
-		if (side?.replaced) await this.restorePDF(item, side);
+		if (side?.replaced) await this.restoreWithJournal(item, side);
 		this._removing.add(item.id);
 		try {
 			await IOUtils.remove(PathUtils.join(this.storageDir(item), SIDECAR), { ignoreAbsent: true });
@@ -668,9 +784,7 @@ NDLOCRIndex = {
 		const failed = [];
 		for (const [item, side] of targets) {
 			try {
-				await this.restorePDF(item, side);
-				const { backup, originalMD5, originalSize, replacedMD5, replaced, ...rest } = side;
-				await IOUtils.writeJSON(PathUtils.join(this.storageDir(item), SIDECAR), rest);
+				await this.restoreWithJournal(item, side);
 			}
 			catch (e) {
 				Zotero.logError(e);
@@ -761,6 +875,9 @@ NDLOCRIndex = {
 						let source = c.path;
 						let sourceIsOriginal = !side?.replaced;
 						if (side?.replaced) {
+							if (await Zotero.Utilities.Internal.md5Async(c.path) !== side.replacedMD5) {
+								throw new Error('OCR 後にファイルが変更されているため、再 OCR しませんでした');
+							}
 							const orig = PathUtils.join(job, 'original.pdf');
 							if (side.backup && await IOUtils.exists(side.backup)) {
 								source = side.backup;
@@ -771,6 +888,7 @@ NDLOCRIndex = {
 								sourceIsOriginal = true;
 							}
 						}
+						const inputMD5 = mode === 'replace' ? await Zotero.Utilities.Internal.md5Async(c.path) : null;
 						const result = await this.runOCR(env, source, (page, total) => {
 							prog.setText(`${head} OCR ${page}/${total} ページ: ${name}`);
 							prog.setProgress(Math.round((i + page / total) / n * 100));
@@ -785,7 +903,7 @@ NDLOCRIndex = {
 						}
 						else if (mode === 'replace') {
 							Object.assign(extra, await this.replacePDF(item, c.path, pdf, side,
-								{ incremental: result.incremental, sourceIsOriginal }));
+								{ incremental: result.incremental, sourceIsOriginal, result, inputMD5 }));
 						}
 						if (side?.replaced && mode !== 'replace') {
 							// 以前に差し替えた PDF はそのまま残るので、元に戻せるよう記録を引き継ぐ
