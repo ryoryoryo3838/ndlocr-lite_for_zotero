@@ -1,4 +1,4 @@
-/* global Zotero, Services, ChromeUtils, IOUtils, PathUtils, Ci */
+/* global Zotero, Services, ChromeUtils, IOUtils, PathUtils, Cc, Ci */
 // NDLOCR-Lite for Zotero — NDLOCR-Lite で PDF を OCR し、Zotero の全文インデックスに登録する。
 //
 // 仕組み:
@@ -251,6 +251,14 @@ NDLOCRIndex = {
 		}
 	},
 
+	/** Zotero から見える PATH に PowerShell のフォルダが入っていないことがあるので、決まった場所を先に見る */
+	async _powershell() {
+		const env = Cc['@mozilla.org/process/environment;1'].getService(Ci.nsIEnvironment);
+		const root = env.get('SystemRoot') || 'C:\\Windows';
+		const path = PathUtils.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+		return await IOUtils.exists(path) ? path : Subprocess.pathSearch('powershell.exe');
+	},
+
 	/**
 	 * 設定画面の「セットアップ」ボタン用。.xpi に同梱したインストーラを取り出して実行する。
 	 * picked の中に ndlocr-lite-zotero フォルダを作る（既存のインストール先を選んだ場合はそこに入れ直す）
@@ -281,7 +289,7 @@ NDLOCRIndex = {
 			const scriptPath = PathUtils.join(dir, name);
 			await IOUtils.writeUTF8(scriptPath, script);
 			const [command, args] = Zotero.isWin
-				? [await Subprocess.pathSearch('powershell.exe'),
+				? [await this._powershell(),
 					['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-InstallDir', dir]]
 				: ['/bin/bash', [scriptPath, dir]];
 			const res = await this._run(command, args, dir, onLine, { NDLOCR_FROM_ZOTERO: '1' });
