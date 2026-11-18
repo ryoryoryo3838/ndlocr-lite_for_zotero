@@ -30,8 +30,29 @@ def embed_incremental(input_pdf, output_pdf, page_results, visible_text=False):
             raise ValueError("ページ数が OCR 結果と合いません")
         buf = BytesIO()
         c = canvas.Canvas(buf)
+        transforms = []
         for page, res in zip(writer.pages, page_results):
-            w, h = float(page.mediabox.width), float(page.mediabox.height)
+            # PDFium renders the intersection of CropBox and MediaBox, after
+            # applying /Rotate. Draw in that displayed coordinate system, then
+            # map the overlay back into the original page's user space.
+            media, crop = page.mediabox, page.cropbox
+            left = max(float(media.left), float(crop.left))
+            bottom = max(float(media.bottom), float(crop.bottom))
+            right = min(float(media.right), float(crop.right))
+            top = min(float(media.top), float(crop.top))
+            width, height = right - left, top - bottom
+            rotation = int(page.rotation) % 360
+            if width <= 0 or height <= 0 or rotation not in (0, 90, 180, 270):
+                raise ValueError("Unsupported PDF page geometry")
+            if rotation == 0:
+                w, h, transform = width, height, (1, 0, 0, 1, left, bottom)
+            elif rotation == 90:
+                w, h, transform = height, width, (0, 1, -1, 0, right, bottom)
+            elif rotation == 180:
+                w, h, transform = width, height, (-1, 0, 0, -1, right, top)
+            else:
+                w, h, transform = height, width, (0, -1, 1, 0, left, top)
+            transforms.append(transform)
             c.setPageSize((w, h))
             for line in res["text_layer_lines"]:
                 ocr._draw_text_layer_line(
@@ -41,8 +62,8 @@ def embed_incremental(input_pdf, output_pdf, page_results, visible_text=False):
             c.showPage()
         c.save()
         buf.seek(0)
-        for page, overlay in zip(writer.pages, PdfReader(buf).pages):
-            page.merge_page(overlay, expand=False)
+        for page, overlay, transform in zip(writer.pages, PdfReader(buf).pages, transforms):
+            page.merge_transformed_page(overlay, transform, expand=False)
         with open(output_pdf, "wb") as f:
             writer.write(f)
         print("[INFO] Text layer appended as an incremental update", flush=True)

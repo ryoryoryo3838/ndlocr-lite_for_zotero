@@ -169,7 +169,7 @@ const K = 'extensions.zotero.ndlocrindex.installDir';
   alerts.pop();
   check('差し替え: 再 OCR でも退避は元のまま', md5(backup) === origMD5);
   await P.removeSelected(win11);
-  check('差し替え: 解除で元に戻す', /1 件の OCR インデックスを解除/.test(alerts.pop()) && md5(origPath) === origMD5 && !fs.existsSync(backup));
+  check('差し替え: 解除で元に戻す（バックアップは保持）', /1 件の OCR インデックスを解除/.test(alerts.pop()) && md5(origPath) === origMD5 && fs.existsSync(backup) && md5(backup) === origMD5);
 
   // 差し替え後にファイルが変わっていたら戻さない
   await P.runSelected(win11, false); alerts.pop();
