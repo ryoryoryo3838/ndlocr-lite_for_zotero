@@ -1,0 +1,6 @@
+# Windows PowerShell 5.1 / cmd が正しく読めるよう CRLF のまま保つ（ps1 は UTF-8 BOM 付き）
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.command text eol=lf
+*.sh text eol=lf
+*.pdf binary

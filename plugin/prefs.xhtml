@@ -1,0 +1,35 @@
+<vbox id="ndlocr-index-prefs">
+	<groupbox>
+		<html:h2>NDLOCR-Lite</html:h2>
+		<label value="インストール先フォルダ（インストーラで作ったフォルダ）:"/>
+		<hbox align="center">
+			<html:input type="text" id="ndlocr-index-installDir" flex="1"
+				preference="extensions.zotero.ndlocrindex.installDir"/>
+			<button id="ndlocr-index-browse" label="参照…"/>
+		</hbox>
+		<hbox align="center">
+			<button id="ndlocr-index-test" label="動作確認"/>
+			<html:span id="ndlocr-index-status" style="white-space: pre-wrap; margin-inline-start: 8px;"/>
+		</hbox>
+	</groupbox>
+
+	<groupbox>
+		<html:h2>OCR</html:h2>
+		<hbox align="center">
+			<label value="PDF を画像にするときの解像度 DPI（既定 150。小さい文字が多い資料は 300）:"/>
+			<html:input type="text" preference="extensions.zotero.ndlocrindex.dpi" style="width: 5em"/>
+		</hbox>
+		<hbox align="center">
+			<label value="この文字数以上のテキストが既にある PDF は「テキストあり」としてスキップ:"/>
+			<html:input type="text" preference="extensions.zotero.ndlocrindex.minChars" style="width: 5em"/>
+		</hbox>
+	</groupbox>
+
+	<groupbox>
+		<html:h2>全文インデックス</html:h2>
+		<checkbox preference="extensions.zotero.ndlocrindex.syncFulltext"
+			label="OCR テキストを Zotero の同期でサーバーにも送る（他の端末でも検索できるようにする）"/>
+		<checkbox preference="extensions.zotero.ndlocrindex.restoreOnReindex"
+			label="再索引で OCR テキストが上書きされたら自動で戻す"/>
+	</groupbox>
+</vbox>
