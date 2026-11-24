@@ -1,10 +1,13 @@
 import os
+import re
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'installer/install_mac.command'
+# インストーラの既定の NDLOCR-Lite の版。既存のインストール先を再利用するテストはこの版で作る
+DEFAULT_VERSION = re.search(r'NDLOCR_VERSION="\$\{NDLOCR_VERSION:-([^}]+)\}"', SCRIPT.read_text()).group(1)
 
 
 class InstallerSafetyTests(unittest.TestCase):
@@ -54,7 +57,7 @@ class InstallerSafetyTests(unittest.TestCase):
             dest = root / 'install'
             ndl = dest / 'ndlocr-lite'
             ndl.mkdir(parents=True)
-            (ndl / '.installed-version').write_text('1.4.0\n')
+            (ndl / '.installed-version').write_text(DEFAULT_VERSION + '\n')
             (ndl / 'requirements.txt').write_text('numpy\n')
             uv = dest / 'uv/uv'
             uv.parent.mkdir()
@@ -139,7 +142,7 @@ exec /bin/cp "$@"
             self.assertNotEqual(first.returncode, 0)
             second = subprocess.run(['bash', str(SCRIPT), str(dest)], env=env, capture_output=True, text=True, timeout=10)
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertEqual((dest / 'ndlocr-lite/.installed-version').read_text().strip(), '1.4.0')
+            self.assertEqual((dest / 'ndlocr-lite/.installed-version').read_text().strip(), DEFAULT_VERSION)
 
     def test_interrupted_venv_creation_can_be_retried(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,7 +150,7 @@ exec /bin/cp "$@"
             dest = root / 'install'
             ndl = dest / 'ndlocr-lite'
             ndl.mkdir(parents=True)
-            (ndl / '.installed-version').write_text('1.4.0\n')
+            (ndl / '.installed-version').write_text(DEFAULT_VERSION + '\n')
             (ndl / 'requirements.txt').write_text('numpy\n')
             uv = dest / 'uv/uv'
             uv.parent.mkdir()
@@ -173,7 +176,7 @@ exit 0
             dest = root / 'install'
             ndl = dest / 'ndlocr-lite'
             ndl.mkdir(parents=True)
-            (ndl / '.installed-version').write_text('1.4.0\n')
+            (ndl / '.installed-version').write_text(DEFAULT_VERSION + '\n')
             (ndl / 'requirements.txt').write_text('numpy\n')
             uv = dest / 'uv/uv'
             uv.parent.mkdir()
@@ -193,7 +196,7 @@ exit 0
             dest = root / 'install'
             ndl = dest / 'ndlocr-lite'
             ndl.mkdir(parents=True)
-            (ndl / '.installed-version').write_text('1.4.0\n')
+            (ndl / '.installed-version').write_text(DEFAULT_VERSION + '\n')
             (ndl / 'requirements.txt').write_text('numpy\n')
             uv = dest / 'uv/uv'
             uv.parent.mkdir()
@@ -217,7 +220,7 @@ exit 0
             dest = root / 'install'
             ndl = dest / 'ndlocr-lite'
             ndl.mkdir(parents=True)
-            (ndl / '.installed-version').write_text('1.4.0\n')
+            (ndl / '.installed-version').write_text(DEFAULT_VERSION + '\n')
             (ndl / 'requirements.txt').write_text('flet\nnumpy\n')
             (ndl / 'important').write_text('keep')
             uv = dest / 'uv/uv'

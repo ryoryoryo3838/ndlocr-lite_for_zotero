@@ -19,7 +19,7 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 
-$NdlocrVersion = if ($env:NDLOCR_VERSION) { $env:NDLOCR_VERSION } else { '1.4.0' }
+$NdlocrVersion = if ($env:NDLOCR_VERSION) { $env:NDLOCR_VERSION } else { '2.0.0' }
 $PyVersion = '3.12'
 $DirName = 'ndlocr-lite-zotero'
 $Title = 'NDLOCR-Lite インストーラ'
@@ -156,12 +156,12 @@ try {
     $env:UV_CACHE_DIR = Join-Path $dir 'cache'
     $env:UV_PYTHON_PREFERENCE = 'only-managed'
 
-    # 2. NDLOCR-Lite 本体（ソースとモデル、約 160MB）
+    # 2. NDLOCR-Lite 本体（ソースとモデル、約 180MB）
     $ndlDir = Join-Path $dir 'ndlocr-lite'
     $verFile = Join-Path $ndlDir '.installed-version'
     $installed = if (Test-Path $verFile) { (Get-Content $verFile -Raw).Trim() } else { '' }
     if ($installed -ne $NdlocrVersion) {
-        Write-Host "[2/4] NDLOCR-Lite $NdlocrVersion をダウンロード中（約 160MB）…"
+        Write-Host "[2/4] NDLOCR-Lite $NdlocrVersion をダウンロード中（約 180MB）…"
         $srcZip = Join-Path $tmp 'ndlocr.zip'
         if ($env:NDLOCR_SRC_ZIP) {
             Copy-Item $env:NDLOCR_SRC_ZIP $srcZip

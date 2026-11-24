@@ -4,7 +4,7 @@
 # NDLOCR-Lite はページだけを新しい PDF に移して文字の層を重ねるため、しおり・文書情報などが消える。
 # ここでは元の PDF に文字の層を増分更新（incremental update）として追記する。元のバイト列は先頭にそのまま残る。
 # 失敗したとき（暗号化 PDF など）は NDLOCR-Lite 本来の書き出しに戻す。
-# NDLOCR-Lite 1.4.0 の内部関数（embed_text_layer_pdf, _draw_text_layer_line）に依存している。
+# NDLOCR-Lite 1.4.0 と 2.0.0 で確認した内部関数（embed_text_layer_pdf, _draw_text_layer_line）に依存している。
 import os
 import sys
 

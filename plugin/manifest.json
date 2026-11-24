@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "NDLOCR-Lite for Zotero",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "NDLOCR-Lite で PDF を OCR し、Zotero の全文インデックスに登録します（PDF は変更しません）",
   "applications": {
     "zotero": {

@@ -12,7 +12,7 @@
 # uv が既に入っていればそれを使う。ほかはこのフォルダ以外に何も書き込まない（削除すればアンインストール完了）。
 set -euo pipefail
 
-NDLOCR_VERSION="${NDLOCR_VERSION:-1.4.0}"
+NDLOCR_VERSION="${NDLOCR_VERSION:-2.0.0}"
 PY_VERSION="3.12"
 DIR_NAME="ndlocr-lite-zotero"
 DEFAULT_DIR="$HOME/$DIR_NAME"
@@ -146,14 +146,14 @@ export UV_PYTHON_INSTALL_DIR="$dir/python"
 export UV_CACHE_DIR="$dir/cache"
 export UV_PYTHON_PREFERENCE="only-managed"
 
-# 2. NDLOCR-Lite 本体（ソースとモデル、約 160MB）
+# 2. NDLOCR-Lite 本体（ソースとモデル、約 180MB）
 installed="$(cat "$dir/ndlocr-lite/.installed-version" 2>/dev/null || true)"
 if [ "$installed" != "$NDLOCR_VERSION" ]; then
   if { [ -e "$dir/ndlocr-lite" ] || [ -L "$dir/ndlocr-lite" ]; } && ! { [ ! -L "$dir/ndlocr-lite" ] && [ ! -L "$source_pending" ] && [ -f "$source_pending" ] && [ "$(cat "$source_pending")" = 'ndlocr-lite-zotero-source-v1' ] && [ ! -e "$dir/ndlocr-lite/.installed-version" ]; }; then
     echo "エラー: 既存の ndlocr-lite は置き換えません。別の空のインストール先を選んでください: $dir/ndlocr-lite" >&2
     exit 1
   fi
-  echo "[2/4] NDLOCR-Lite ${NDLOCR_VERSION} をダウンロード中（約 160MB）…"
+  echo "[2/4] NDLOCR-Lite ${NDLOCR_VERSION} をダウンロード中（約 180MB）…"
   if [ -n "${NDLOCR_SRC_ZIP:-}" ]; then
     cp "$NDLOCR_SRC_ZIP" "$tmp/ndlocr.zip"
   else
