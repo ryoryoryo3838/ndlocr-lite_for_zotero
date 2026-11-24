@@ -5,6 +5,8 @@
 		<hbox align="center">
 			<button id="ndlocr-index-setup" label="セットアップ…"/>
 		</hbox>
+		<checkbox preference="extensions.zotero.ndlocrindex.installLegacy"
+			label="旧版の NDLOCR-Lite 1.4.0 も一緒にインストールする（2.0.0 で問題があったときの保険。約 160MB 追加。「使う NDLOCR-Lite の版」で切り替える）"/>
 		<label value="インストール先フォルダ:"/>
 		<hbox align="center">
 			<html:input type="text" id="ndlocr-index-installDir" flex="1"
@@ -14,6 +16,10 @@
 		<hbox align="center">
 			<button id="ndlocr-index-test" label="動作確認"/>
 			<html:span id="ndlocr-index-status" style="white-space: pre-wrap; margin-inline-start: 8px;"/>
+		</hbox>
+		<hbox align="center">
+			<label value="使う NDLOCR-Lite の版（インストール先にある版から選ぶ）:"/>
+			<html:select id="ndlocr-index-version"/>
 		</hbox>
 	</groupbox>
 

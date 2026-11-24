@@ -16,6 +16,7 @@ fs.mkdirSync(path.join(DATA, 'storage', 'CCCC3333'), { recursive: true });
 const log = [];
 // ---- IOUtils / PathUtils
 const IOUtils = {
+  getChildren: async p => fs.readdirSync(p).map(n => path.join(p, n)),
   exists: async p => fs.existsSync(p),
   readUTF8: async p => fs.readFileSync(p, 'utf8'),
   readJSON: async p => JSON.parse(fs.readFileSync(p, 'utf8')),
@@ -54,7 +55,7 @@ items[10] = { id: 10, isAttachment: () => false, isRegularItem: () => true, getA
 const cacheFile = it => ({ path: path.join(DATA, 'storage', it.key, '.zotero-ft-cache') });
 const Zotero = {
   debug: m => log.push(m), logError: e => console.log('logError:', e.message || e),
-  Prefs: { _p: { 'extensions.zotero.ndlocrindex.installDir': NDLOCR_DIR, 'extensions.zotero.ndlocrindex.dpi': '150', 'extensions.zotero.ndlocrindex.minChars': '100', 'extensions.zotero.ndlocrindex.syncFulltext': true, 'extensions.zotero.ndlocrindex.restoreOnReindex': true, 'extensions.zotero.ndlocrindex.pdfOutput': 'attach', 'extensions.zotero.ndlocrindex.backupOriginal': true }, get(k) { return this._p[k]; }, set(k, v) { this._p[k] = v; } },
+  Prefs: { _p: { 'extensions.zotero.ndlocrindex.installDir': NDLOCR_DIR, 'extensions.zotero.ndlocrindex.dpi': '150', 'extensions.zotero.ndlocrindex.minChars': '100', 'extensions.zotero.ndlocrindex.syncFulltext': true, 'extensions.zotero.ndlocrindex.restoreOnReindex': true, 'extensions.zotero.ndlocrindex.pdfOutput': 'attach', 'extensions.zotero.ndlocrindex.backupOriginal': true }, get(k) { return this._p[k]; }, set(k, v) { this._p[k] = v; }, clear(k) { delete this._p[k]; } },
   isWin: process.platform === 'win32', Utilities: { randomString: n => Math.random().toString(36).slice(2, 2 + n), Internal: { openPreferences() {}, md5Async: async p => md5(p) } },
   DataDirectory: { dir: DATA },
   Attachments: { LINK_MODE_LINKED_URL: 3, getStorageDirectory: it => ({ path: path.join(DATA, 'storage', it.key) }),
@@ -101,10 +102,14 @@ const K = 'extensions.zotero.ndlocrindex.installDir';
   check('setup: インストール先を設定に保存', Zotero.Prefs._p[K] === s.dir);
   check('setup: 進捗を 1 行ずつ渡す', lines.some(l => l.includes('[4/4]')));
   check('setup: 終了後は実行中でない', !P.running);
+  check('setup: 入れた版を「使う版」にする', s.version === '2.0.0' && Zotero.Prefs._p['extensions.zotero.ndlocrindex.ndlocrVersion'] === '2.0.0');
+  const src = (await P.listVersions(NDLOCR_DIR)).find(v => v.version === s.version)?.srcDir;
+  check('setup: 版ごとのフォルダに入れる（0.2.x の ndlocr-lite/ が同じ版ならそれを使う）',
+    [path.join(NDLOCR_DIR, 'ndlocr-lite-2.0.0'), path.join(NDLOCR_DIR, 'ndlocr-lite')].includes(src), src);
 
   // パスの正規化とインストール先の自動検出
   for (const v of [NDLOCR_DIR, `"${NDLOCR_DIR}${path.sep}"`, `  ${NDLOCR_DIR}${path.sep}${path.sep}  `,
-    path.join(NDLOCR_DIR, 'ndlocr-lite', 'src'), path.join(NDLOCR_DIR, 'ndlocr-lite', 'src', 'ocr.py')]) {
+    path.join(src, 'src'), path.join(src, 'src', 'ocr.py')]) {
     Zotero.Prefs._p[K] = v;
     const r = await P.checkEnv();
     check(`checkEnv ${JSON.stringify(v)}`, r.ok && path.resolve(r.dir) === path.resolve(NDLOCR_DIR));
@@ -114,6 +119,47 @@ const K = 'extensions.zotero.ndlocrindex.installDir';
   Zotero.Prefs._p[K] = NDLOCR_DIR;
 
   check('testInstall', (await P.testInstall()).ok);
+
+  // 版の一覧・切り替え・削除（中身は ocr.py だけの見せかけの版で試す）
+  const fakeVersion = (dirName, version) => {
+    const d = path.join(NDLOCR_DIR, dirName);
+    fs.mkdirSync(path.join(d, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(d, 'src', 'ocr.py'), '');
+    fs.writeFileSync(path.join(d, '.installed-version'), version + '\n');
+    return d;
+  };
+  const VK = 'extensions.zotero.ndlocrindex.ndlocrVersion';
+  const oldDir = fakeVersion('ndlocr-lite-0.0.1', '0.0.1');
+  const badDir = fakeVersion('ndlocr-lite-9.9.9', '1.0.0'); // フォルダ名と記録が合わない
+  const listed = (await P.listVersions(NDLOCR_DIR)).map(v => v.version);
+  check('版の一覧: 新しい順で、記録が合わないフォルダは数えない', listed[0] === '2.0.0' && listed.includes('0.0.1') && !listed.includes('1.0.0') && !listed.includes('9.9.9'), JSON.stringify(listed));
+  Zotero.Prefs._p[VK] = '0.0.1';
+  const e1 = await P.checkEnv();
+  check('使う版: 設定した版の ocr.py を使う', e1.version === '0.0.1' && e1.ocrPy === path.join(oldDir, 'src', 'ocr.py'));
+  Zotero.Prefs._p[VK] = '8.8.8';
+  check('使う版: 入っていない版なら、いちばん新しい版を使う', (await P.checkEnv()).version === '2.0.0');
+  let refused = false;
+  try { await P.removeVersion(NDLOCR_DIR, '9.9.9'); } catch (e) { refused = true; }
+  check('古い版の削除: 記録が合わないフォルダは消さない', refused && fs.existsSync(badDir));
+  Zotero.Prefs._p[VK] = '0.0.1';
+  await P.removeVersion(NDLOCR_DIR, '0.0.1');
+  check('古い版の削除: 消すと「使う版」を戻す', !fs.existsSync(oldDir) && Zotero.Prefs._p[VK] === undefined && (await P.checkEnv()).version === '2.0.0');
+  fs.rmSync(badDir, { recursive: true });
+  Zotero.Prefs._p[VK] = '2.0.0';
+
+  // 旧版も一緒にインストール（1.4.0 が未インストールならダウンロードする）
+  const srcZip = process.env.NDLOCR_SRC_ZIP;
+  delete process.env.NDLOCR_SRC_ZIP; // 2.0.0 の zip を 1.4.0 として入れないように
+  const sl = await P.setup(NDLOCR_DIR, () => {}, { legacy: true });
+  if (srcZip) process.env.NDLOCR_SRC_ZIP = srcZip;
+  const vs = (await P.listVersions(NDLOCR_DIR)).map(v => v.version);
+  check('旧版も: 2.0.0 と 1.4.0 が並ぶ', sl.ok && vs.includes('2.0.0') && vs.includes('1.4.0'), sl.msg.slice(-300));
+  check('旧版も: 使う版は 2.0.0 のまま、今回入れた版は削除の候補にしない',
+    Zotero.Prefs._p[VK] === '2.0.0' && !sl.others.includes('1.4.0') && !sl.others.includes('2.0.0'));
+  Zotero.Prefs._p[VK] = '1.4.0';
+  const t14 = await P.testInstall();
+  check('旧版も: 1.4.0 に切り替えて起動できる', t14.ok && t14.version === '1.4.0', t14.msg.slice(-200));
+  Zotero.Prefs._p[VK] = '2.0.0';
 
   // 選択 OCR: 1 件登録、テキストあり・ファイルなしはスキップ
   const origPath = path.join(DATA, 'storage/AAAA1111/日本語の論文.pdf'), origMD5 = md5(origPath);
@@ -169,7 +215,7 @@ const K = 'extensions.zotero.ndlocrindex.installDir';
   alerts.pop();
   check('差し替え: 再 OCR でも退避は元のまま', md5(backup) === origMD5);
   await P.removeSelected(win11);
-  check('差し替え: 解除で元に戻す', /1 件の OCR インデックスを解除/.test(alerts.pop()) && md5(origPath) === origMD5 && !fs.existsSync(backup));
+  check('差し替え: 解除で元に戻す（バックアップは保持）', /1 件の OCR インデックスを解除/.test(alerts.pop()) && md5(origPath) === origMD5 && fs.existsSync(backup) && md5(backup) === origMD5);
 
   // 差し替え後にファイルが変わっていたら戻さない
   await P.runSelected(win11, false); alerts.pop();

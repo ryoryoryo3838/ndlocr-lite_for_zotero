@@ -56,10 +56,15 @@ var NDLOCRIndexPrefs = {
 		try {
 			const res = await plugin.setup(picked, (line) => {
 				if (line.trim()) this._status('インストール中… ' + line.trim());
-			});
+			}, { legacy: !!Zotero.Prefs.get('extensions.zotero.ndlocrindex.installLegacy', true) });
 			if (res.ok) {
 				this._setDir(res.dir);
 				await this.test();
+				// 新しい版が動くと確かめてから、古い版を消すか聞く
+				if (res.others.length && plugin.askRemoveVersions(window, res.others)) {
+					for (const version of res.others) await plugin.removeVersion(res.dir, version);
+					await this.fillVersions();
+				}
 			}
 			else {
 				this._status('✗ ' + res.msg);
@@ -75,6 +80,32 @@ var NDLOCRIndexPrefs = {
 			}
 			catch (e) {}
 		}
+	},
+
+	/** 「使う版」の選択肢を、インストール先にある版で作り直す */
+	async fillVersions() {
+		const plugin = Zotero.NDLOCRIndex;
+		if (!plugin) return;
+		const dir = plugin.resolveDir(Zotero.Prefs.get('extensions.zotero.ndlocrindex.installDir', true));
+		const versions = dir ? await plugin.listVersions(dir) : [];
+		const current = versions.length ? plugin._pickVersion(versions).version : '';
+		try {
+			const select = document.getElementById('ndlocr-index-version');
+			select.replaceChildren(...versions.map(({ version }) => {
+				const option = document.createElementNS('http://www.w3.org/1999/xhtml', 'option');
+				option.value = version;
+				option.textContent = version;
+				return option;
+			}));
+			select.value = current;
+			select.disabled = versions.length < 2;
+		}
+		catch (e) {} // 設定画面が閉じられた
+	},
+
+	async selectVersion(version) {
+		Zotero.Prefs.set('extensions.zotero.ndlocrindex.ndlocrVersion', version, true);
+		await this.test();
 	},
 
 	_setDir(path) {
@@ -98,6 +129,7 @@ var NDLOCRIndexPrefs = {
 			// 中のフォルダや引用符付きのパスが指定されていたら、見つけたインストール先に直す
 			if (res.dir) this._setDir(res.dir);
 			this._status((res.ok ? '✓ ' : '✗ ') + res.msg);
+			await this.fillVersions();
 		}
 		catch (e) {
 			Zotero.logError(e);
@@ -113,10 +145,18 @@ var NDLOCRIndexPrefs = {
 		else if (id === 'ndlocr-index-browse') NDLOCRIndexPrefs.browse();
 		else if (id === 'ndlocr-index-test') NDLOCRIndexPrefs.test();
 	};
+	// 「使う版」は html:select なので command ではなく change で受ける
+	const onChange = (event) => {
+		if (event.target?.id === 'ndlocr-index-version') NDLOCRIndexPrefs.selectVersion(event.target.value);
+	};
 	// 設定画面を開き直すとスクリプトが再読み込みされるので、前回の登録を外してから付け直す
 	if (window.__ndlocrIndexPrefsHandler) {
 		document.removeEventListener('command', window.__ndlocrIndexPrefsHandler);
+		document.removeEventListener('change', window.__ndlocrIndexPrefsChange);
 	}
 	window.__ndlocrIndexPrefsHandler = handler;
+	window.__ndlocrIndexPrefsChange = onChange;
 	document.addEventListener('command', handler);
+	document.addEventListener('change', onChange);
+	NDLOCRIndexPrefs.fillVersions();
 })();
