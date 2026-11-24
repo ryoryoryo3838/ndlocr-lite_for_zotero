@@ -56,7 +56,7 @@ var NDLOCRIndexPrefs = {
 		try {
 			const res = await plugin.setup(picked, (line) => {
 				if (line.trim()) this._status('インストール中… ' + line.trim());
-			});
+			}, { legacy: !!Zotero.Prefs.get('extensions.zotero.ndlocrindex.installLegacy', true) });
 			if (res.ok) {
 				this._setDir(res.dir);
 				await this.test();

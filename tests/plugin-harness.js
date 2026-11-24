@@ -147,6 +147,20 @@ const K = 'extensions.zotero.ndlocrindex.installDir';
   fs.rmSync(badDir, { recursive: true });
   Zotero.Prefs._p[VK] = '2.0.0';
 
+  // 旧版も一緒にインストール（1.4.0 が未インストールならダウンロードする）
+  const srcZip = process.env.NDLOCR_SRC_ZIP;
+  delete process.env.NDLOCR_SRC_ZIP; // 2.0.0 の zip を 1.4.0 として入れないように
+  const sl = await P.setup(NDLOCR_DIR, () => {}, { legacy: true });
+  if (srcZip) process.env.NDLOCR_SRC_ZIP = srcZip;
+  const vs = (await P.listVersions(NDLOCR_DIR)).map(v => v.version);
+  check('旧版も: 2.0.0 と 1.4.0 が並ぶ', sl.ok && vs.includes('2.0.0') && vs.includes('1.4.0'), sl.msg.slice(-300));
+  check('旧版も: 使う版は 2.0.0 のまま、今回入れた版は削除の候補にしない',
+    Zotero.Prefs._p[VK] === '2.0.0' && !sl.others.includes('1.4.0') && !sl.others.includes('2.0.0'));
+  Zotero.Prefs._p[VK] = '1.4.0';
+  const t14 = await P.testInstall();
+  check('旧版も: 1.4.0 に切り替えて起動できる', t14.ok && t14.version === '1.4.0', t14.msg.slice(-200));
+  Zotero.Prefs._p[VK] = '2.0.0';
+
   // 選択 OCR: 1 件登録、テキストあり・ファイルなしはスキップ
   const origPath = path.join(DATA, 'storage/AAAA1111/日本語の論文.pdf'), origMD5 = md5(origPath);
   await P.runSelected(win, false);

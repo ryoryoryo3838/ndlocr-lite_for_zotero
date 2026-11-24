@@ -20,6 +20,8 @@ var SIDECAR = '.zotero-ndlocr.json';
 var INSTALL_DIR_NAME = 'ndlocr-lite-zotero';
 // セットアップで入れる NDLOCR-Lite の版。インストール先には版ごとのフォルダ（ndlocr-lite-<版>）で並べて置ける
 var NDLOCR_VERSION = '2.0.0';
+// セットアップで「旧版も一緒にインストールする」を選んだときに入れる版（新しい版で問題があったときの保険）
+var NDLOCR_LEGACY_VERSION = '1.4.0';
 var BACKUP_DIR_NAME = 'ndlocr-lite-backup';
 var MENU_IDS = {
 	itemSep: 'ndlocr-index-item-sep',
@@ -324,7 +326,7 @@ NDLOCRIndex = {
 	 * 設定画面の「セットアップ」ボタン用。.xpi に同梱したインストーラを取り出して実行する。
 	 * picked の中に ndlocr-lite-zotero フォルダを作る（既存のインストール先を選んだ場合はそこに入れ直す）
 	 */
-	async setup(picked, onLine) {
+	async setup(picked, onLine, { legacy = false } = {}) {
 		picked = this.resolveDir(picked);
 		if (/[^\x20-\x7E]/.test(picked)) {
 			return { ok: false, msg: `場所のパスに日本語などの全角文字が含まれています。英数字だけのパスの場所を選んでください: ${picked}` };
@@ -352,16 +354,22 @@ NDLOCRIndex = {
 				? [await this._powershell(),
 					['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-InstallDir', dir]]
 				: ['/bin/bash', [scriptPath, dir]];
-			const res = await this._run(command, args, dir, onLine, { NDLOCR_FROM_ZOTERO: '1', NDLOCR_VERSION });
-			if (this.cancelRequested) return { ok: false, dir, msg: '中止しました。セットアップは未完了です。再実行する場合は別の保存先を選んでください。' };
-			if (res.exitCode !== 0) {
-				return { ok: false, dir, msg: `インストールに失敗しました（終了コード ${res.exitCode}）:\n${res.output.slice(-1500)}` };
+			// インストーラは 1 回に 1 つの版を入れる。旧版も選ばれていたら、新しい版のあとにもう一度実行する
+			const installed = [];
+			for (const version of legacy ? [NDLOCR_VERSION, NDLOCR_LEGACY_VERSION] : [NDLOCR_VERSION]) {
+				const res = await this._run(command, args, dir, onLine, { NDLOCR_FROM_ZOTERO: '1', NDLOCR_VERSION: version });
+				if (this.cancelRequested) return { ok: false, dir, msg: '中止しました。セットアップは未完了です。再実行する場合は別の保存先を選んでください。' };
+				if (res.exitCode !== 0) {
+					return { ok: false, dir, msg: `NDLOCR-Lite ${version} のインストールに失敗しました（終了コード ${res.exitCode}）:\n${res.output.slice(-1500)}` };
+				}
+				installed.push(version);
+				// 新しい版が入った時点で使えるようにしておく（旧版で失敗しても新しい版は使える）
+				Zotero.Prefs.set(PREF_PREFIX + 'installDir', dir, true);
+				Zotero.Prefs.set(PREF_PREFIX + 'ndlocrVersion', NDLOCR_VERSION, true);
 			}
-			Zotero.Prefs.set(PREF_PREFIX + 'installDir', dir, true);
-			Zotero.Prefs.set(PREF_PREFIX + 'ndlocrVersion', NDLOCR_VERSION, true);
-			// 古い版は残しておき、消すかどうかは設定画面で聞く
-			const others = (await this.listVersions(dir)).map(v => v.version).filter(v => v !== NDLOCR_VERSION);
-			return { ok: true, dir, version: NDLOCR_VERSION, others, msg: `NDLOCR-Lite ${NDLOCR_VERSION} をインストールしました: ${dir}` };
+			// 今回入れなかった版は残しておき、消すかどうかは設定画面で聞く
+			const others = (await this.listVersions(dir)).map(v => v.version).filter(v => !installed.includes(v));
+			return { ok: true, dir, version: NDLOCR_VERSION, others, msg: `NDLOCR-Lite ${installed.join(' と ')} をインストールしました: ${dir}` };
 		}
 		catch (e) {
 			this.log(e);
@@ -867,7 +875,7 @@ NDLOCRIndex = {
 	askRemoveVersions(win, versions) {
 		return Services.prompt.confirm(win, 'NDLOCR-Lite for Zotero',
 			`NDLOCR-Lite ${NDLOCR_VERSION} をインストールしました。\n`
-			+ `インストール先に残っている古い版（${versions.join('、')}）を削除しますか？\n\n`
+			+ `インストール先に残っている、今回インストールしなかった版（${versions.join('、')}）を削除しますか？\n\n`
 			+ '残しておくと、設定の「使う NDLOCR-Lite の版」で切り替えて使えます（1 つの版で約 160〜190MB）。');
 	},
 
