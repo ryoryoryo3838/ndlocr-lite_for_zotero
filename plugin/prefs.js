@@ -5,3 +5,4 @@ pref("extensions.zotero.ndlocrindex.syncFulltext", false);
 pref("extensions.zotero.ndlocrindex.restoreOnReindex", true);
 pref("extensions.zotero.ndlocrindex.pdfOutput", "replace");
 pref("extensions.zotero.ndlocrindex.backupOriginal", true);
+pref("extensions.zotero.ndlocrindex.ndlocrVersion", "");

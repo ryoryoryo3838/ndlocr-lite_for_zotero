@@ -7,12 +7,16 @@
 # フォルダの中身:
 #   uv/            パッケージ管理ツール uv
 #   python/        uv が入れる Python
-#   ndlocr-lite/   NDLOCR-Lite 本体とモデル
-#   .venv/         NDLOCR-Lite 用の Python 環境
+#   ndlocr-lite-<版>/  NDLOCR-Lite 本体とモデル（版ごと。0.2.x のインストーラで作った ndlocr-lite/ もそのまま使う）
+#   .venv/         NDLOCR-Lite 用の Python 環境（版をまたいで共用）
 # uv が既に入っていればそれを使う。ほかはこのフォルダ以外に何も書き込まない（削除すればアンインストール完了）。
 set -euo pipefail
 
 NDLOCR_VERSION="${NDLOCR_VERSION:-2.0.0}"
+if ! [[ "$NDLOCR_VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
+  echo "エラー: NDLOCR_VERSION には英数字と . _ - だけを使ってください: $NDLOCR_VERSION" >&2
+  exit 1
+fi
 PY_VERSION="3.12"
 DIR_NAME="ndlocr-lite-zotero"
 DEFAULT_DIR="$HOME/$DIR_NAME"
@@ -57,7 +61,7 @@ if [ -z "$dir" ]; then
       if is_ascii "$picked"; then break; fi
       gui_alert "選んだ場所のパスに日本語などの全角文字が含まれています。英数字だけのパスの場所を選んでください。\n\n$picked"
     done
-    if [ -f "$picked/ndlocr-lite/.installed-version" ] || [ "$(basename "$picked")" = "$DIR_NAME" ]; then
+    if [ -d "$picked/.venv" ] || [ "$(basename "$picked")" = "$DIR_NAME" ]; then
       dir="$picked"            # 既存のインストール先を選んだ場合はそのまま使う
     else
       dir="$picked/$DIR_NAME"
@@ -76,17 +80,43 @@ mkdir -p "$dir"
 dir="$(cd "$dir" && pwd)"
 echo "インストール先: $dir"
 
+# NDLOCR-Lite は版ごとのフォルダに入れる。0.2.x のインストーラは ndlocr-lite/ に入れていたので、同じ版ならそれを使う
+src_dir="$dir/ndlocr-lite-$NDLOCR_VERSION"
+if [ ! -L "$dir/ndlocr-lite" ] && [ ! -L "$dir/ndlocr-lite/.installed-version" ] && [ -f "$dir/ndlocr-lite/.installed-version" ] \
+  && [ "$(cat "$dir/ndlocr-lite/.installed-version")" = "$NDLOCR_VERSION" ]; then
+  src_dir="$dir/ndlocr-lite"
+fi
+
 # Never adopt or replace pre-existing directories without an installation marker.
-source_pending="$dir/ndlocr-lite/.ndlocr-zotero-source-pending"
-if [ ! -f "$dir/ndlocr-lite/.installed-version" ] && { [ -e "$dir/ndlocr-lite" ] || [ -L "$dir/ndlocr-lite" ]; } && ! { [ ! -L "$source_pending" ] && [ -f "$source_pending" ] && [ "$(cat "$source_pending")" = 'ndlocr-lite-zotero-source-v1' ]; }; then
+if [ ! -f "$dir/ndlocr-lite/.installed-version" ] && { [ -e "$dir/ndlocr-lite" ] || [ -L "$dir/ndlocr-lite" ]; }; then
   echo "エラー: unmarked ndlocr-lite exists: ${dir}。既存データは変更せず、別の空のインストール先を選んでください。" >&2
   exit 1
 fi
-if [ -L "$dir/ndlocr-lite" ] || [ -L "$dir/.venv" ]; then
+source_pending="$src_dir/.ndlocr-zotero-source-pending"
+if [ ! -f "$src_dir/.installed-version" ] && { [ -e "$src_dir" ] || [ -L "$src_dir" ]; } && ! { [ ! -L "$source_pending" ] && [ -f "$source_pending" ] && [ "$(cat "$source_pending")" = 'ndlocr-lite-zotero-source-v1' ]; }; then
+  echo "エラー: unmarked $(basename "$src_dir") exists: ${dir}。既存データは変更せず、別の空のインストール先を選んでください。" >&2
+  exit 1
+fi
+if [ -L "$dir/ndlocr-lite" ] || [ -L "$src_dir" ] || [ -L "$dir/.venv" ]; then
   echo "エラー: install directories must not be symlinks: $dir" >&2
   exit 1
 fi
 venv_marker="$dir/.venv/.ndlocr-zotero-venv"
+# 0.2.x のインストーラが作った .venv にはマーカーがない。中の python/ の CPython を指す venv で、
+# ndlocr-lite/ も 0.2.x の形（.installed-version あり）のときだけ、このインストーラのものとして引き継ぐ
+if [ -d "$dir/.venv" ] && [ ! -L "$dir/.venv" ] && [ ! -e "$venv_marker" ] && [ ! -L "$venv_marker" ] \
+  && [ -f "$dir/ndlocr-lite/.installed-version" ] && [ ! -L "$dir/ndlocr-lite/.installed-version" ] \
+  && [ -f "$dir/.venv/pyvenv.cfg" ] && [ ! -L "$dir/.venv/pyvenv.cfg" ] && [ -d "$dir/python" ] && [ ! -L "$dir/python" ]; then
+  venv_home="$(sed -n 's/^home *= *//p' "$dir/.venv/pyvenv.cfg" | head -1)"
+  case "$venv_home" in
+    "$dir/python/"*)
+      if [[ "$venv_home" != *..* ]]; then
+        echo "0.2.x で作った .venv を引き継ぎます: $dir/.venv"
+        printf '%s\n' 'ndlocr-lite-zotero-venv-v1' > "$venv_marker"
+      fi
+      ;;
+  esac
+fi
 venv_exists=0
 venv_reserved=0
 if [ -e "$dir/.venv" ]; then
@@ -147,10 +177,10 @@ export UV_CACHE_DIR="$dir/cache"
 export UV_PYTHON_PREFERENCE="only-managed"
 
 # 2. NDLOCR-Lite 本体（ソースとモデル、約 180MB）
-installed="$(cat "$dir/ndlocr-lite/.installed-version" 2>/dev/null || true)"
+installed="$(cat "$src_dir/.installed-version" 2>/dev/null || true)"
 if [ "$installed" != "$NDLOCR_VERSION" ]; then
-  if { [ -e "$dir/ndlocr-lite" ] || [ -L "$dir/ndlocr-lite" ]; } && ! { [ ! -L "$dir/ndlocr-lite" ] && [ ! -L "$source_pending" ] && [ -f "$source_pending" ] && [ "$(cat "$source_pending")" = 'ndlocr-lite-zotero-source-v1' ] && [ ! -e "$dir/ndlocr-lite/.installed-version" ]; }; then
-    echo "エラー: 既存の ndlocr-lite は置き換えません。別の空のインストール先を選んでください: $dir/ndlocr-lite" >&2
+  if { [ -e "$src_dir" ] || [ -L "$src_dir" ]; } && ! { [ ! -L "$src_dir" ] && [ ! -L "$source_pending" ] && [ -f "$source_pending" ] && [ "$(cat "$source_pending")" = 'ndlocr-lite-zotero-source-v1' ] && [ ! -e "$src_dir/.installed-version" ]; }; then
+    echo "エラー: 既存の $(basename "$src_dir") は置き換えません。別の空のインストール先を選んでください: $src_dir" >&2
     exit 1
   fi
   echo "[2/4] NDLOCR-Lite ${NDLOCR_VERSION} をダウンロード中（約 180MB）…"
@@ -160,15 +190,15 @@ if [ "$installed" != "$NDLOCR_VERSION" ]; then
     curl -fL --progress-bar "https://github.com/ndl-lab/ndlocr-lite/archive/refs/tags/${NDLOCR_VERSION}.zip" -o "$tmp/ndlocr.zip"
   fi
   unzip -q "$tmp/ndlocr.zip" -d "$tmp/src"
-  if [ ! -e "$dir/ndlocr-lite" ] && [ ! -L "$dir/ndlocr-lite" ]; then
-    mkdir "$dir/ndlocr-lite"
+  if [ ! -e "$src_dir" ] && [ ! -L "$src_dir" ]; then
+    mkdir "$src_dir"
     printf '%s\n' 'ndlocr-lite-zotero-source-v1' > "$source_pending"
   fi
-  if [ -L "$dir/ndlocr-lite" ] || [ -L "$source_pending" ] || [ ! -f "$source_pending" ] || [ "$(cat "$source_pending")" != 'ndlocr-lite-zotero-source-v1' ]; then
-    echo "エラー: unmarked ndlocr-lite。別の空のインストール先を選んでください。" >&2; exit 1
+  if [ -L "$src_dir" ] || [ -L "$source_pending" ] || [ ! -f "$source_pending" ] || [ "$(cat "$source_pending")" != 'ndlocr-lite-zotero-source-v1' ]; then
+    echo "エラー: unmarked $(basename "$src_dir")。別の空のインストール先を選んでください。" >&2; exit 1
   fi
-  cp -R "$tmp/src/"*/. "$dir/ndlocr-lite/"
-  echo "$NDLOCR_VERSION" > "$dir/ndlocr-lite/.installed-version"
+  cp -R "$tmp/src/"*/. "$src_dir/"
+  echo "$NDLOCR_VERSION" > "$src_dir/.installed-version"
   rm -f "$source_pending"
 else
   echo "[2/4] NDLOCR-Lite ${NDLOCR_VERSION} はインストール済み"
@@ -185,13 +215,15 @@ if [ "$venv_exists" = 0 ]; then
   [ -x "$dir/.venv/bin/python" ] || { echo 'エラー: .venv の Python が作成されませんでした' >&2; exit 1; }
   printf '%s\n' 'ndlocr-lite-zotero-venv-v1' > "$venv_marker"
 fi
-grep -v -i '^flet' "$dir/ndlocr-lite/requirements.txt" > "$dir/requirements-cli.txt"
+# shortcut: .venv は版をまたいで共用する（1.4.0 と 2.0.0 の依存は同じ版指定で、2.0.0 が markdown-it-py を足しただけ）。
+# 依存がぶつかる版が出たら、版ごとに .venv を分ける
+grep -v -i '^flet' "$src_dir/requirements.txt" > "$dir/requirements-cli.txt"
 "$UV" pip install --python "$dir/.venv/bin/python" -r "$dir/requirements-cli.txt"
 "$UV" cache clean >/dev/null 2>&1 || true
 
 # 4. 動作確認
 echo "[4/4] 動作確認…"
-"$dir/.venv/bin/python" "$dir/ndlocr-lite/src/ocr.py" --version
+"$dir/.venv/bin/python" "$src_dir/src/ocr.py" --version
 
 copied=""
 if command -v pbcopy >/dev/null; then printf '%s' "$dir" | pbcopy && copied="（パスはクリップボードにコピーしました）"; fi

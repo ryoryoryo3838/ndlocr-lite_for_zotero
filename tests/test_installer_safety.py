@@ -81,16 +81,14 @@ class InstallerSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             dest = root / 'install'
-            ndl = dest / 'ndlocr-lite'
-            ndl.mkdir(parents=True)
-            (ndl / '.installed-version').write_text('old\n')
+            ndl = dest / f'ndlocr-lite-{DEFAULT_VERSION}'
+            dest.mkdir(parents=True)
             uv = dest / 'uv/uv'
             uv.parent.mkdir()
-            uv.write_text('''#!/bin/sh
+            uv.write_text(f'''#!/bin/sh
 if [ "$1" = --version ]; then
-  mv "$DEST/ndlocr-lite" "$DEST/original"
-  mkdir "$DEST/ndlocr-lite"
-  printf keep > "$DEST/ndlocr-lite/important"
+  mkdir "$DEST/ndlocr-lite-{DEFAULT_VERSION}"
+  printf keep > "$DEST/ndlocr-lite-{DEFAULT_VERSION}/important"
 fi
 exit 0
 ''')
@@ -107,11 +105,8 @@ exit 0
             env = {**os.environ, 'HOME': tmp, 'DEST': str(dest), 'PATH': f'{fakebin}:/usr/bin:/bin', 'NDLOCR_SRC_ZIP': str(archive), 'NDLOCR_FROM_ZOTERO': '1'}
             result = subprocess.run(['bash', str(SCRIPT), str(dest)], env=env, capture_output=True, text=True, timeout=10)
             self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(ndl.exists())
-            if (ndl / 'important').exists():
-                self.assertEqual((ndl / 'important').read_text(), 'keep')
-            else:
-                self.assertEqual((ndl / '.installed-version').read_text(), 'old\n')
+            self.assertEqual((ndl / 'important').read_text(), 'keep')
+            self.assertFalse((ndl / '.installed-version').exists())
             self.assertIn('別の', result.stderr)
 
     def test_interrupted_source_copy_can_be_retried(self):
@@ -142,7 +137,7 @@ exec /bin/cp "$@"
             self.assertNotEqual(first.returncode, 0)
             second = subprocess.run(['bash', str(SCRIPT), str(dest)], env=env, capture_output=True, text=True, timeout=10)
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertEqual((dest / 'ndlocr-lite/.installed-version').read_text().strip(), DEFAULT_VERSION)
+            self.assertEqual((dest / f'ndlocr-lite-{DEFAULT_VERSION}/.installed-version').read_text().strip(), DEFAULT_VERSION)
 
     def test_interrupted_venv_creation_can_be_retried(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -243,8 +238,58 @@ exit 0
             self.assertEqual((ndl / 'important').read_text(), 'keep')
             self.assertEqual((dest / 'requirements-cli.txt').read_text(), 'numpy\n')
 
+    def _legacy_install(self, root, venv_home):
+        """0.2.x のインストーラが作った形（ndlocr-lite/ に 1.4.0、マーカーのない .venv）を作る"""
+        import zipfile
+        dest = root / 'install'
+        ndl = dest / 'ndlocr-lite'
+        ndl.mkdir(parents=True)
+        (ndl / '.installed-version').write_text('1.4.0\n')
+        (ndl / 'important').write_text('keep')
+        (dest / 'python/cpython-3.12/bin').mkdir(parents=True)
+        python = dest / '.venv/bin/python'
+        python.parent.mkdir(parents=True)
+        python.write_text('#!/bin/sh\nexit 0\n')
+        python.chmod(0o755)
+        (dest / '.venv/pyvenv.cfg').write_text(f'home = {venv_home(dest)}\n')
+        uv = dest / 'uv/uv'
+        uv.parent.mkdir()
+        uv.write_text('#!/bin/sh\nexit 0\n')
+        uv.chmod(0o755)
+        archive = root / 'source.zip'
+        with zipfile.ZipFile(archive, 'w') as z:
+            z.writestr('source/requirements.txt', 'numpy\n')
+        env = {**os.environ, 'HOME': str(root), 'PATH': '/usr/bin:/bin', 'NDLOCR_SRC_ZIP': str(archive), 'NDLOCR_FROM_ZOTERO': '1'}
+        return dest, subprocess.run(['bash', str(SCRIPT), str(dest)], env=env, capture_output=True, text=True, timeout=10)
+
+    def test_legacy_install_is_adopted_and_new_version_installed_beside_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest, result = self._legacy_install(Path(tmp), lambda d: d / 'python/cpython-3.12/bin')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((dest / '.venv/.ndlocr-zotero-venv').read_text().strip(), 'ndlocr-lite-zotero-venv-v1')
+            self.assertEqual((dest / 'ndlocr-lite/important').read_text(), 'keep')
+            self.assertEqual((dest / 'ndlocr-lite/.installed-version').read_text().strip(), '1.4.0')
+            self.assertEqual((dest / f'ndlocr-lite-{DEFAULT_VERSION}/.installed-version').read_text().strip(), DEFAULT_VERSION)
+
+    def test_legacy_venv_pointing_outside_is_not_adopted(self):
+        for name, home in (('outside', lambda d: '/usr/bin'), ('dotdot', lambda d: d / 'python/../../elsewhere')):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                dest, result = self._legacy_install(Path(tmp), home)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('.venv', result.stderr)
+                self.assertFalse((dest / '.venv/.ndlocr-zotero-venv').exists())
+                self.assertFalse((dest / f'ndlocr-lite-{DEFAULT_VERSION}').exists())
+
+    def test_rejects_unsafe_version_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, 'HOME': tmp, 'PATH': '/usr/bin:/bin', 'NDLOCR_FROM_ZOTERO': '1', 'NDLOCR_VERSION': '../x'}
+            result = subprocess.run(['bash', str(SCRIPT), str(Path(tmp) / 'install')], env=env, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('NDLOCR_VERSION', result.stderr)
+            self.assertFalse((Path(tmp) / 'install').exists())
+
     def test_unmarked_existing_directory_is_not_touched(self):
-        for name in ('ndlocr-lite', '.venv'):
+        for name in ('ndlocr-lite', f'ndlocr-lite-{DEFAULT_VERSION}', '.venv'):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 dest = root / 'install'

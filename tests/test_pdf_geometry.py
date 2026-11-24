@@ -11,7 +11,18 @@ import pypdfium2
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 
-OCR_SRC = os.environ.get('NDLOCR_OCR_SRC') or os.path.join(os.environ['NDLOCR_DIR'], 'ndlocr-lite', 'src')
+def _newest_src(install_dir):
+    """インストール先でいちばん新しい NDLOCR-Lite の src（ndlocr-lite-<版>/ か、0.2.x で作った ndlocr-lite/）"""
+    found = []
+    for name in os.listdir(install_dir):
+        marker = os.path.join(install_dir, name, '.installed-version')
+        if (name == 'ndlocr-lite' or name.startswith('ndlocr-lite-')) and os.path.isfile(marker):
+            version = open(marker).read().strip()
+            found.append((tuple(int(x) if x.isdigit() else 0 for x in version.replace('-', '.').split('.')), name))
+    return os.path.join(install_dir, max(found)[1], 'src')
+
+
+OCR_SRC = os.environ.get('NDLOCR_OCR_SRC') or _newest_src(os.environ['NDLOCR_DIR'])
 sys.path.insert(0, OCR_SRC)
 import ocr
 
